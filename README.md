@@ -50,6 +50,7 @@ HugePages were allocated to provide large, contiguous memory pages for DPDK. A t
 ```bash
 sudo sysctl -w vm.nr_hugepages=1024
 ```
+![](screenshots/HugePages.png)
 
 Result: The system successfully allocated 1024 HugePages, verified using:
 
@@ -81,6 +82,8 @@ sudo ./build/examples/dpdk-helloworld -l 0-3 -n 4
 ```
 
 Result: The example ran successfully, printing "hello" from each core (0 to 3).
+
+![](screenshots/helloworld.png)
 
 ## Challenges and Solutions
 

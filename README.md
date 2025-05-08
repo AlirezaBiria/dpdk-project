@@ -15,4 +15,6 @@ These were installed using:
 ```bash
 sudo apt update
 sudo apt install libnuma-dev libpcap-dev python3-pyelftools ninja-build python3-pip
-'''bash
+System Specifications
+
+The project was executed on the following system:

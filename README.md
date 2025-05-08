@@ -1,128 +1,136 @@
-Installation Challenges for LTTng and Trace Compass on Ubuntu 20.04
+markdown
+
+# DPDK Project: Setting Up and Running the helloworld Example
+
+This repository contains the setup and execution of the **helloworld** example using the Data Plane Development Kit (DPDK) within a VPP (Vector Packet Processing) environment. This report outlines the steps, challenges faced, solutions applied, results achieved, and system specifications.
+
+## Prerequisites
+
+To replicate this project, the following tools and dependencies were installed:
+- **Ubuntu 20.04 LTS** (or compatible Linux distribution)
+- **DPDK** (integrated within VPP source code)
+- **Meson** (version 1.8.0 or higher)
+- **Ninja** (version 1.10.0 or higher)
+- **Dependencies**: `libnuma-dev`, `libpcap-dev`, `python3-pyelftools`, `ninja-build`, `python3-pip`
+
+These were installed using:
+```bash
+sudo apt update
+sudo apt install libnuma-dev libpcap-dev python3-pyelftools ninja-build python3-pip
+
 System Specifications
 
-Operating System: Ubuntu 20.04 LTS (Focal Fossa)
-CPU: Intel Core i7-4500U (2.0 GHz, 4 cores)
-RAM: 8 GB
-GPU: NVIDIA GeForce 820M (using Nouveau open-source driver)
-Disk Space: 176 GB free
-Kernel Version: 5.4.0-174-generic
+The project was executed on the following system:
+
 Architecture: x86_64
+CPU op-mode(s): 32-bit, 64-bit
+Byte Order: Little Endian
+Address sizes: 39 bits physical, 48 bits virtual
+CPU(s): 4
+On-line CPU(s) list: 0-3
+Thread(s) per core: 2
+Core(s) per socket: 2
+Socket(s): 1
+NUMA node(s): 1
+Vendor ID: GenuineIntel
+CPU family: 6
+Model: 69
+Model name: Intel(R) Core(TM) i7-4500U CPU @ 1.80GHz
+Stepping: 1
+CPU MHz: 1000.000
+CPU max MHz: 3000.0000
+CPU min MHz: 800.0000
+BogoMIPS: 4789.31
+Virtualization: VT-x
+L1d cache: 64 KiB
+L1i cache: 64 KiB
+L2 cache: 512 KiB
+L3 cache: 4 MiB
+NUMA node0 CPU(s): 0-3
+[...truncated for brevity...]
+Flags: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf pni pclmulqdq dtes64 monitor ds_cpl vmx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm cpuid_fault epb invpcid_single pti ssbd ibrs ibpb stibp tpr_shadow vnmi flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid xsaveopt dtherm ida arat pln pts md_clear flush_l1d
 
-LTTng Installation
-Steps
-The following commands were used to install LTTng components:
-sudo apt update
-sudo apt install -y lttng-tools lttng-modules-dkms
-sudo apt install -y liblttng-ust0 liblttng-ust-dev
+Steps to Set Up and Run helloworld
+1. Configuring HugePages
 
-Challenges
+HugePages were allocated to provide large, contiguous memory pages for DPDK. A total of 1024 HugePages (2 GB) were configured.
 
-Missing lttng-ust Package:
+Command:
+bash
 
-Initial attempts to install lttng-ust failed with the error: Unable to locate package lttng-ust.
-Solution: The correct package name for Ubuntu 20.04 is liblttng-ust0. Installed using:sudo apt install -y liblttng-ust0 liblttng-ust-dev
+sudo sysctl -w vm.nr_hugepages=1024
 
+Result: The system successfully allocated 1024 HugePages, verified using cat /proc/meminfo | grep HugePages.
+2. Setting Up the DPDK Build Environment
 
+The DPDK source code was located at /home/eagle/vpp/build-root/build-vpp-native/external/src-dpdk. The helloworld example was built using Meson and Ninja.
 
+Commands:
+bash
 
-Babeltrace2 Unavailable:
+cd /home/eagle/vpp/build-root/build-vpp-native/external/src-dpdk
+rm -rf build
+meson setup build
+cd build
+meson configure -Dexamples=helloworld
+ninja
 
-Attempting to install babeltrace2 failed as it was not available in Ubuntu 20.04's default repositories.
-Solution: Proceeded with the pre-installed babeltrace (version 1.5.8), which was sufficient for LTTng trace analysis:babeltrace --version
+Result: The build process created the dpdk-helloworld executable in build/examples/.
+3. Running the helloworld Example
 
+The helloworld example was executed on CPU cores 0-3 to verify the DPDK installation.
 
+Command:
+bash
 
+sudo ./build/examples/dpdk-helloworld -l 0-3 -n 4
 
+Result: The example ran successfully, printing "hello" from each core (0 to 3), confirming that DPDK was correctly configured and operational.
+Challenges and Solutions
+1. Outdated Meson Version
 
-Verification
+    Issue: The initial Meson version (0.53.2) was incompatible with DPDK, which required version 0.57 or higher.
 
-LTTng version: 2.11.2
-Kernel modules loaded:lsmod | grep lttng
+    Solution: Upgraded Meson to version 1.8.0 using:
+    bash
 
-Output confirmed modules like lttng_tracer, lttng_statedump, etc.
-User-space libraries:ldconfig -p | grep lttng
+    pip3 install --user meson --upgrade
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
 
-Confirmed presence of liblttng-ust.so, liblttng-ust-ctl.so, etc.
+    Outcome: The upgraded Meson resolved compatibility issues.
 
-Trace Compass Installation
-Steps
-Trace Compass (version 10.3.0) was downloaded manually and installed:
-mv ~/Downloads/trace-compass-10.3.0-20250313-1426-linux.gtk.x86_64.tar.gz ~
-tar -xvzf trace-compass-10.3.0-20250313-1426-linux.gtk.x86_64.tar.gz
-sudo mv trace-compass /opt/trace-compass
-sudo apt install -y openjdk-21-jre
-cd /opt/trace-compass
-./tracecompass
+2. Missing helloworld Executable
 
-Challenges
+    Issue: After running ninja, the dpdk-helloworld executable was not found.
 
-Download Issues:
+    Solution: Rebuilt the project from scratch:
+    bash
 
-Initial attempts to download Trace Compass 9.0.0 using wget resulted in HTTP 403 Forbidden errors:wget https://download.eclipse.org/tracecompass/releases/9.0.0/linux/tracecompass-9.0.0-20230614-0836-linux64.tar.gz
+    cd /home/eagle/vpp/build-root/build-vpp-native/external/src-dpdk
+    rm -rf build
+    meson setup build
+    cd build
+    meson configure -Dexamples=helloworld
+    ninja
 
+    Outcome: The executable was correctly generated.
 
-Directory listings (rcp, rcp-repository, repository) did not include the expected tar.gz file.
-Solution: Manually downloaded version 10.3.0 from:https://download.eclipse.org/tracecompass/releases/10.3.0/linux/
+3. PATH Configuration for Meson
 
+    Issue: Upgraded Meson was not in the system’s PATH.
 
+    Solution: Added ~/.local/bin to PATH (see commands above).
 
-
-Java Version Requirement:
-
-Trace Compass 10.3.0 requires Java 21, which was not available in Ubuntu 20.04’s default repositories.
-Solution: Added the OpenJDK PPA and installed Java 21:sudo add-apt-repository ppa:openjdk-r/ppa
-sudo apt update
-sudo apt install -y openjdk-21-jre
-
-
-
-
-Pixman and GTK Errors:
-
-Running ./tracecompass produced errors:*** BUG ***
-In pixman_region32_init_rect: Invalid rectangle passed
-Set a breakpoint on '_pixman_log_error' to debug
-
-(Trace Compass:91358): Gtk-WARNING **: Negative content width -7 (allocation 1, extents 4x4) while allocating gadget (node button, owner GtkButton)
-
-
-Cause: Likely due to the Nouveau driver for NVIDIA GeForce 820M, which may have compatibility issues with GTK/Pixman.
-Temporary Solution: Errors were ignored as the GUI functioned correctly. Potential fix includes installing the NVIDIA proprietary driver:sudo apt install -y nvidia-driver-470
-sudo reboot
-
-
-
-
-Java Annotation Warnings:
-
-Warnings about javax.inject and javax.annotation packages appeared:WARNING: Annotation classes from the 'javax.inject' or 'javax.annotation' package found.
-
-
-Solution: Suppressed by adding JVM flags:./tracecompass -Declipse.e4.inject.javax.warning=false
-
-
-
-
-
-Verification
-
-Trace Compass GUI opened successfully.
-A sample LTTng trace was created and loaded:lttng create sample-session
-sudo lttng enable-event -a -k
-sudo lttng start
-sleep 5
-sudo lttng stop
-
-
-Trace loaded in Trace Compass via File > Open Trace (~/lttng-traces/sample-session-*/).
-
-Recommendations
-
-For LTTng: Ensure correct package names (liblttng-ust0 instead of lttng-ust) and verify babeltrace compatibility.
-For Trace Compass: Use the archive site (archive.eclipse.org) for older versions or manually download newer versions. Install Java 21 for version 10.3.0.
-For Graphics Issues: Consider installing NVIDIA proprietary drivers to resolve Pixman/GTK errors.
-For Cleaner Output: Suppress Java warnings with JVM flags.
+    Outcome: Correct Meson version (1.8.0) was used.
 
 Conclusion
-Despite initial challenges with package availability, download errors, and graphical issues, LTTng and Trace Compass were successfully installed and functional. The system is now ready for kernel and user-space tracing with graphical analysis.
+
+This project successfully configured HugePages and ran the DPDK helloworld example on CPU cores 0-3. The challenges related to Meson versioning and build issues were resolved through careful debugging and rebuilding. The results confirm that the DPDK environment is correctly set up.
+References
+
+    DPDK Documentation
+
+    Memif Guide
+
+    VPP Source Code: /home/eagle/vpp

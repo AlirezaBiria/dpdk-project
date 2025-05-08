@@ -12,7 +12,6 @@ To replicate this project, the following tools and dependencies were installed:
 - **Dependencies**: `libnuma-dev`, `libpcap-dev`, `python3-pyelftools`, `ninja-build`, `python3-pip`
 
 These were installed using:
-```bash
 sudo apt update
 sudo apt install libnuma-dev libpcap-dev python3-pyelftools ninja-build python3-pip
 

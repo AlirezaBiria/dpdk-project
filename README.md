@@ -122,7 +122,7 @@ show port stats 0
 
 **Server Output (memif Server):**
 
-![memif Server Output](server_output.png)
+![memif Server Output](screenshot/server_output.png)
 
 **Analysis of Server Output:**
 - Port 0 was configured with the MAC address `FA:EC:EB:32:87:CE`.

@@ -119,36 +119,41 @@ The experiment successfully demonstrated packet forwarding using DPDK's `net_tap
 
 This setup provides a strong foundation for further kernel-level analysis, visualization in Trace Compass, or latency profiling.
 
-# 🧪 DPDK Packet Forwarding with `net_tap` and Capture using `tshark`
+# 🧪 DPDK Packet Forwarding using `net_tap` PMD and Traffic Capture with `tshark`
 
 ## ✅ Overview
 
-This test demonstrates packet forwarding using **DPDK’s `net_tap` PMD** between two virtual TAP interfaces: `tap0` (input) and `tap1` (output). An ICMP packet is injected via `tcpreplay` on `tap0`, processed by `testpmd`, and captured with `tshark` on `tap1`.
+This report documents the successful setup, execution, and observation of a DPDK-based packet forwarding pipeline using the `net_tap` PMD. The test includes injecting a packet via `tap0`, forwarding it through `testpmd`, and capturing the result on `tap1` using `tshark`.
 
 ---
 
-## ⚙️ Environment
+## ⚙️ System Configuration
 
-- **DPDK version:** 23.11  
-- **OS:** Ubuntu Linux  
-- **Tools:** `Scapy`, `tcpreplay`, `tshark`  
-- **Interfaces:** `tap0` (input), `tap1` (output)  
-- **DPDK App:** `testpmd`
+- **DPDK Version:** 23.11  
+- **Operating System:** Ubuntu Linux  
+- **Tools Used:**  
+  - `Scapy` (packet generation)  
+  - `tcpreplay` (packet replay)  
+  - `testpmd` (DPDK application)  
+  - `tshark` (traffic capture)  
+- **Interfaces:**  
+  - `tap0` – input  
+  - `tap1` – output  
 
 ---
 
-## 🔧 Step-by-Step Instructions
+## 🔧 Step-by-Step Execution
 
 ### 1. Create an ICMP Packet with Scapy
 
 ```python
-# create_pcap.py
+# File: create_pcap.py
 from scapy.all import Ether, IP, ICMP, wrpcap
 pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / IP(src="10.0.0.2", dst="10.0.0.1") / ICMP()
 wrpcap("input.pcap", [pkt])
 ```
 
-Run:
+Then run:
 
 ```bash
 python3 create_pcap.py
@@ -156,7 +161,7 @@ python3 create_pcap.py
 
 ---
 
-### 2. Start DPDK `testpmd` with net_tap PMD
+### 2. Launch DPDK `testpmd` with TAP Interfaces
 
 ```bash
 cd ~/dpdk-23.11
@@ -170,79 +175,87 @@ sudo ./build/app/dpdk-testpmd -c 0xf -n 4 \
   --auto-start
 ```
 
-Sample output:
+🔎 **Expected Output:**
 
 ```
-Logical Core 1 forwards packets:
+Logical Core 1 (socket 0) forwards packets on 2 streams:
   RX P=0 → TX P=1
   RX P=1 → TX P=0
 
-RX-packets: 28     TX-packets: 26
-RX-packets: 26     TX-packets: 28
+Forward statistics:
+Port 0: RX=28, TX=26
+Port 1: RX=26, TX=28
+Total RX=54, TX=54
 ```
+
+> Press `Ctrl+C` when ready to exit testpmd and stop packet forwarding.
 
 ---
 
-### 3. Start Capturing on `tap1` Using tshark
+### 3. Start Capturing Packets with `tshark` on `tap1`
 
 ```bash
 sudo tshark -i tap1 -w /tmp/tap1_capture.pcapng
 ```
 
-Output:
-
-```
-Capturing on 'tap1'
-```
-
-Let this run...
+> Leave this running and proceed to the next step in a new terminal window.
 
 ---
 
-### 4. Replay the Input Packet on `tap0`
+### 4. Replay the ICMP Packet via `tap0`
 
 ```bash
 sudo tcpreplay -i tap0 input.pcap
 ```
 
-Expected:
+🔎 **Output:**
 
 ```
-Actual: 1 packets sent successfully
+Warning: flow_decode: packet 1 needs at least 62 bytes for ICMP header but only 42 available
+Actual: 1 packets (42 bytes) sent in 0.000018 seconds
+Rated: 2333333.3 Bps, 18.66 Mbps, 55555.55 pps
 ```
+
+Now stop `tshark` by pressing `Ctrl+C`.
 
 ---
 
-### 5. Stop tshark and Inspect Capture
-
-Stop with `Ctrl+C`, then:
+### 5. Inspect the Capture with `tshark`
 
 ```bash
-tshark -r /tmp/tap1_capture.pcapng
+sudo tshark -r /tmp/tap1_capture.pcapng
 ```
 
-Example:
+🔍 **Output:**
 
 ```
-1  10.0.0.2 → 10.0.0.1  ICMP Echo (ping) request
+Running as user "root" and group "root". This could be dangerous.
+    1 0.000000000     10.0.0.2 → 10.0.0.1     ICMP 42 Echo (ping) request  id=0x0000, seq=0/0, ttl=64
+    2 44.111859034 fe80::2c29:1dff:fe89:14cc → ff02::2      ICMPv6 70 Router Solicitation ...
+    3 52.720576332 fe80::1818:8cff:fe18:e8eb → ff02::fb     MDNS 203 Standard query ...
+    4 53.104617958 fe80::2c29:1dff:fe89:14cc → ff02::fb     MDNS 203 Standard query ...
+    5 54.359876773 fe80::1818:8cff:fe18:e8eb → ff02::2      ICMPv6 70 Router Solicitation ...
 ```
 
 ---
 
 ## 📁 Output Files
 
-| File                          | Description                        |
-|-------------------------------|------------------------------------|
-| `input.pcap`                  | Packet to inject on `tap0`         |
-| `/tmp/tap1_capture.pcapng`    | Output capture from `tap1`         |
+| File Path                     | Description                            |
+|------------------------------|----------------------------------------|
+| `input.pcap`                 | Generated ICMP packet for replay       |
+| `/tmp/tap1_capture.pcapng`   | Captured packets on TAP interface      |
 
 ---
 
-## ✅ Conclusion
+## ✅ Summary
 
-This confirms successful packet injection, forwarding, and capture using DPDK and `net_tap`. All traffic was captured with `tshark`, ready for analysis in Wireshark or similar tools.
+This experiment confirms that:
 
-This setup allows for full packet path visibility without needing physical NICs — perfect for DPDK prototyping and tracing labs.
+- DPDK successfully forwarded packets via the `net_tap` driver.
+- `tshark` correctly captured traffic from the `tap1` interface.
+- The injected ICMP packet and system-generated ICMPv6/MDNS traffic were observable in the resulting `.pcapng` file.
 
+This setup is ideal for tracing and debugging DPDK pipelines in virtualized environments, using kernel interfaces and software-based NIC emulation.
 
 

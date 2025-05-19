@@ -1,131 +1,120 @@
-# DPDK Project: Setting Up and Running the helloworld Example
+# DPDK Packet Forwarding and LTTng Tracing Using net\_tap PMD
 
-This repository contains the setup and execution of the **helloworld** example using the Data Plane Development Kit (DPDK) within a VPP (Vector Packet Processing) environment. This report outlines the steps, challenges faced, solutions applied, results achieved, and system specifications.
+## Overview
 
-## Prerequisites
+This report documents the successful execution and tracing of a DPDK-based packet forwarding pipeline using the `net_tap` Poll Mode Driver (PMD). The setup involves sending packets from a pcap file into a DPDK testpmd application via a TAP interface, forwarding them internally within DPDK, and finally capturing the forwarded packets on another TAP interface. System call tracing was performed using LTTng to monitor kernel-level activity during this process.
 
-To replicate this project, the following tools and dependencies were installed:
+---
 
-* **Ubuntu 20.04 LTS** (or compatible Linux distribution)
-* **DPDK** (integrated within VPP source code)
-* **Meson** (version 1.8.0 or higher)
-* **Ninja** (version 1.10.0 or higher)
-* **Dependencies**: `libnuma-dev`, `libpcap-dev`, `python3-pyelftools`, `ninja-build`, `python3-pip`
+## System Configuration
 
-These were installed using:
+* **DPDK version:** 23.11
+* **Operating System:** Ubuntu Linux
+* **Tracing Tool:** LTTng (kernel syscall tracing)
+* **Interfaces Used:** `tap0` (input) and `tap1` (output)
 
-```bash
-sudo apt update
-sudo apt install libnuma-dev libpcap-dev python3-pyelftools ninja-build python3-pip
+---
+
+## Step-by-Step Execution
+
+### 1. Packet Preparation
+
+A valid ICMP packet was constructed and saved into a `pcap` file using Scapy:
+
+```python
+from scapy.all import Ether, IP, ICMP, wrpcap
+pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / IP(src="10.0.0.2", dst="10.0.0.1") / ICMP()
+wrpcap("input.pcap", [pkt])
 ```
 
-## System Specifications
-
-The project was executed on the following system:
+### 2. Starting DPDK testpmd with TAP Interfaces
 
 ```bash
-Architecture: x86_64
-CPU op-mode(s): 32-bit, 64-bit
-Byte Order: Little Endian
-Address sizes: 39 bits physical, 48 bits virtual
-CPU(s): 4
-On-line CPU(s) list: 0-3
-Thread(s) per core: 2
-Core(s) per socket: 2
-Socket(s): 1
-NUMA node(s): 1
-Vendor ID: GenuineIntel
-Model name: Intel(R) Core(TM) i7-4500U CPU @ 1.80GHz
-CPU MHz: 1000.000
-CPU max MHz: 3000.0000
-...
+cd ~/dpdk-23.11
+
+sudo ./build/app/dpdk-testpmd -c 0xf -n 4 \
+  --vdev=net_tap0,iface=tap0 \
+  --vdev=net_tap1,iface=tap1 \
+  -- \
+  --port-topology=chained \
+  --forward-mode=io \
+  --auto-start
 ```
 
-## Steps to Set Up and Run helloworld
+#### Output Summary:
 
-### 1. Configuring HugePages
+```
+Logical Core 1 (socket 0) forwards packets on 2 streams:
+  RX P=0/Q=0 (socket 0) -> TX P=1/Q=0 (socket 0)
+  RX P=1/Q=0 (socket 0) -> TX P=0/Q=0 (socket 0)
 
-HugePages were allocated to provide large, contiguous memory pages for DPDK. A total of 1024 HugePages (2 GB) were configured.
+Forward statistics:
+Port 0: RX=22, TX=30
+Port 1: RX=30, TX=22
+Total RX=52, TX=52
+```
+
+---
+
+### 3. LTTng Trace Activation
 
 ```bash
-sudo sysctl -w vm.nr_hugepages=1024
+sudo lttng destroy dpdk-final 2>/dev/null
+sudo lttng create dpdk-final
+sudo lttng enable-event --kernel --syscall --all
+sudo lttng start
 ```
-![](screenshots/HugePages.png)
 
-Result: The system successfully allocated 1024 HugePages, verified using:
+---
+
+### 4. Traffic Injection and Capture
+
+#### Run tcpdump to capture output on tap1:
 
 ```bash
-cat /proc/meminfo | grep HugePages
+sudo tcpdump -i tap1 -w pcapout.pcap
 ```
 
-### 2. Setting Up the DPDK Build Environment
+*(run in background and stop with Ctrl+C after replay)*
 
-The DPDK source code was located at `/home/eagle/vpp/build-root/build-vpp-native/external/src-dpdk`. The helloworld example was built using Meson and Ninja:
+#### Replay pcap packet on tap0:
 
 ```bash
-cd /home/eagle/vpp/build-root/build-vpp-native/external/src-dpdk
-rm -rf build
-meson setup build
-cd build
-meson configure -Dexamples=helloworld
-ninja
+sudo tcpreplay -i tap0 input.pcap
 ```
 
-Result: The build process created the `dpdk-helloworld` executable in `build/examples/`.
+Result:
 
-### 3. Running the helloworld Example
+```
+1 packet sent successfully on tap0
+3 packets captured on tap1
+```
 
-The example was executed on CPU cores 0-3:
+---
+
+### 5. Finalize LTTng Trace
 
 ```bash
-sudo ./build/examples/dpdk-helloworld -l 0-3 -n 4
+sudo lttng stop
+sudo lttng destroy
 ```
 
-Result: The example ran successfully, printing "hello" from each core (0 to 3).
+### 6. Trace Analysis
 
-![](screenshots/helloworld.png)
+```bash
+sudo babeltrace /root/lttng-traces/dpdk-final-* | wc -l
+```
 
-## Challenges and Solutions
+Result:
 
-### 1. Outdated Meson Version
+```
+16923505 system call events captured
+```
 
-* **Issue**: The initial Meson version (0.53.2) was incompatible.
-* **Solution**:
-
-  ```bash
-  pip3 install --user meson --upgrade
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-  source ~/.bashrc
-  ```
-* **Outcome**: Compatibility issue resolved.
-
-### 2. Missing helloworld Executable
-
-* **Issue**: After running `ninja`, the executable was missing.
-* **Solution**:
-
-  ```bash
-  cd /home/eagle/vpp/build-root/build-vpp-native/external/src-dpdk
-  rm -rf build
-  meson setup build
-  cd build
-  meson configure -Dexamples=helloworld
-  ninja
-  ```
-* **Outcome**: Rebuild successfully generated the executable.
-
-### 3. PATH Configuration for Meson
-
-* **Issue**: Installed Meson was not in system's PATH.
-* **Solution**: Added `$HOME/.local/bin` to PATH (see Solution above).
-* **Outcome**: Correct version of Meson used.
+---
 
 ## Conclusion
 
-This project successfully configured HugePages and ran the DPDK helloworld example on CPU cores 0-3. Challenges were resolved through version upgrades and rebuilds. The DPDK environment is confirmed operational.
+The experiment successfully demonstrated packet forwarding using DPDK's `net_tap` PMD between two TAP interfaces and traced the corresponding system call activity using LTTng. The packet flow was verified using `tcpdump`, and over 16 million syscall events were recorded, confirming the system's runtime behavior.
 
-## References
-
-* [DPDK Documentation](https://doc.dpdk.org)
-* [Memif Guide](https://doc.dpdk.org/guides/nics/memif.html)
-* VPP Source Code: `/home/eagle/vpp`
+This setup provides a strong foundation for further kernel-level analysis, visualization in Trace Compass, or latency profiling.

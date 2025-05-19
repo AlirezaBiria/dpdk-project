@@ -118,3 +118,131 @@ Result:
 The experiment successfully demonstrated packet forwarding using DPDK's `net_tap` PMD between two TAP interfaces and traced the corresponding system call activity using LTTng. The packet flow was verified using `tcpdump`, and over 16 million syscall events were recorded, confirming the system's runtime behavior.
 
 This setup provides a strong foundation for further kernel-level analysis, visualization in Trace Compass, or latency profiling.
+
+# 🧪 DPDK Packet Forwarding with `net_tap` and Capture using `tshark`
+
+## ✅ Overview
+
+This test demonstrates packet forwarding using **DPDK’s `net_tap` PMD** between two virtual TAP interfaces: `tap0` (input) and `tap1` (output). An ICMP packet is injected via `tcpreplay` on `tap0`, processed by `testpmd`, and captured with `tshark` on `tap1`.
+
+---
+
+## ⚙️ Environment
+
+- **DPDK version:** 23.11  
+- **OS:** Ubuntu Linux  
+- **Tools:** `Scapy`, `tcpreplay`, `tshark`  
+- **Interfaces:** `tap0` (input), `tap1` (output)  
+- **DPDK App:** `testpmd`
+
+---
+
+## 🔧 Step-by-Step Instructions
+
+### 1. Create an ICMP Packet with Scapy
+
+```python
+# create_pcap.py
+from scapy.all import Ether, IP, ICMP, wrpcap
+pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / IP(src="10.0.0.2", dst="10.0.0.1") / ICMP()
+wrpcap("input.pcap", [pkt])
+```
+
+Run:
+
+```bash
+python3 create_pcap.py
+```
+
+---
+
+### 2. Start DPDK `testpmd` with net_tap PMD
+
+```bash
+cd ~/dpdk-23.11
+
+sudo ./build/app/dpdk-testpmd -c 0xf -n 4 \
+  --vdev=net_tap0,iface=tap0 \
+  --vdev=net_tap1,iface=tap1 \
+  -- \
+  --port-topology=chained \
+  --forward-mode=io \
+  --auto-start
+```
+
+Sample output:
+
+```
+Logical Core 1 forwards packets:
+  RX P=0 → TX P=1
+  RX P=1 → TX P=0
+
+RX-packets: 28     TX-packets: 26
+RX-packets: 26     TX-packets: 28
+```
+
+---
+
+### 3. Start Capturing on `tap1` Using tshark
+
+```bash
+sudo tshark -i tap1 -w /tmp/tap1_capture.pcapng
+```
+
+Output:
+
+```
+Capturing on 'tap1'
+```
+
+Let this run...
+
+---
+
+### 4. Replay the Input Packet on `tap0`
+
+```bash
+sudo tcpreplay -i tap0 input.pcap
+```
+
+Expected:
+
+```
+Actual: 1 packets sent successfully
+```
+
+---
+
+### 5. Stop tshark and Inspect Capture
+
+Stop with `Ctrl+C`, then:
+
+```bash
+tshark -r /tmp/tap1_capture.pcapng
+```
+
+Example:
+
+```
+1  10.0.0.2 → 10.0.0.1  ICMP Echo (ping) request
+```
+
+---
+
+## 📁 Output Files
+
+| File                          | Description                        |
+|-------------------------------|------------------------------------|
+| `input.pcap`                  | Packet to inject on `tap0`         |
+| `/tmp/tap1_capture.pcapng`    | Output capture from `tap1`         |
+
+---
+
+## ✅ Conclusion
+
+This confirms successful packet injection, forwarding, and capture using DPDK and `net_tap`. All traffic was captured with `tshark`, ready for analysis in Wireshark or similar tools.
+
+This setup allows for full packet path visibility without needing physical NICs — perfect for DPDK prototyping and tracing labs.
+
+
+

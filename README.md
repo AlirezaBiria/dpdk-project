@@ -1,261 +1,253 @@
-# DPDK Packet Forwarding and LTTng Tracing Using net\_tap PMD
+# DPDK Packet Forwarding and Function Tracing using net\_tap and LTTng
 
-## Overview
-
-This report documents the successful execution and tracing of a DPDK-based packet forwarding pipeline using the `net_tap` Poll Mode Driver (PMD). The setup involves sending packets from a pcap file into a DPDK testpmd application via a TAP interface, forwarding them internally within DPDK, and finally capturing the forwarded packets on another TAP interface. System call tracing was performed using LTTng to monitor kernel-level activity during this process.
+This report documents the successful execution and function-level tracing of a DPDK-based packet forwarding scenario using the `net_tap` PMD, with comprehensive instrumentation and user-space tracing enabled via LTTng.
 
 ---
 
-## System Configuration
+## 🧠 Scenario Overview
 
-* **DPDK version:** 23.11
-* **Operating System:** Ubuntu Linux
-* **Tracing Tool:** LTTng (kernel syscall tracing)
-* **Interfaces Used:** `tap0` (input) and `tap1` (output)
+We simulate a real-world packet forwarding pipeline with two TAP interfaces and full function-level tracing using LTTng. The steps include:
+
+1. A `.pcap` file (`test_capture.pcap`) containing real network traffic (both UDP and TCP) is replayed to `tap0`.
+2. DPDK `testpmd` application is used to receive and forward traffic from `tap0` to `tap1`, using the `net_tap` virtual device.
+3. Each port is configured with **2 queues**:
+
+   * Queue 0: for **UDP traffic**
+   * Queue 1: for **non-UDP (e.g., TCP)** traffic (attempted, but kernel rejected TCP rules)
+4. Flow rules are created to classify traffic based on protocol and redirect them to the correct queue.
+5. LTTng UST with `cyg_profile` is used to trace **all function entries/exits**, along with `vpid`, `vtid`, and `procname` context.
+6. Trace is collected for \~5 seconds and stored under a named session for analysis in **Trace Compass**.
 
 ---
 
-## Step-by-Step Execution
+## 📁 PCAP File Content Summary
 
-### 1. Packet Preparation
+The `test_capture.pcap` file was created using a real traffic capture and contains a mixture of protocols, primarily:
 
-A valid ICMP packet was constructed and saved into a `pcap` file using Scapy:
+### 📊 Protocol Breakdown (from `tshark -z io,phs`)
 
-```python
-from scapy.all import Ether, IP, ICMP, wrpcap
-pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / IP(src="10.0.0.2", dst="10.0.0.1") / ICMP()
-wrpcap("input.pcap", [pkt])
+```
+eth                                      frames:20394 bytes:11837933
+  arp                                    frames:695 bytes:41704
+  ip                                     frames:17960 bytes:11538596
+    tcp                                  frames:14274 bytes:9785086
+      tls                                frames:5831 bytes:5530869
+        tcp.segments                     frames:815 bytes:797405
+          tls                            frames:431 bytes:560620
+          data                           frames:1 bytes:1314
+      _ws.malformed                      frames:40 bytes:38394
+      tcp.segments                       frames:34 bytes:44651
+      data                               frames:49 bytes:64386
+      http                               frames:2 bytes:404
+    udp                                  frames:3669 bytes:1752656
+      mdns                               frames:1194 bytes:206681
+      dhcp                               frames:30 bytes:10395
+      ssdp                               frames:127 bytes:29589
+      nbns                               frames:264 bytes:24792
+      llmnr                              frames:316 bytes:20522
+      data                               frames:1498 bytes:1417302
+      dns                                frames:143 bytes:17723
+      dcp-etsi                           frames:1 bytes:1292
+      adwin_config                       frames:3 bytes:334
+      db-lsp-disc                        frames:69 bytes:19302
+      nbdgm                              frames:11 bytes:2631
+        smb                              frames:11 bytes:2631
+          mailslot                       frames:11 bytes:2631
+            browser                      frames:7 bytes:1639
+            data                         frames:4 bytes:992
+      mndp                               frames:6 bytes:1138
+      steam_ihs_discovery                frames:6 bytes:873
+      teredo                             frames:1 bytes:82
+        ipv6                             frames:1 bytes:82
+    igmp                                 frames:17 bytes:854
+  llc                                    frames:82 bytes:5172
+    basicxid                             frames:19 bytes:1140
+    stp                                  frames:63 bytes:4032
+  ipv6                                   frames:1657 bytes:252461
+    icmpv6                               frames:264 bytes:23256
+    udp                                  frames:1393 bytes:229205
+      mdns                               frames:982 bytes:177477
+      dhcpv6                             frames:64 bytes:8584
+      llmnr                              frames:317 bytes:26911
+      ssdp                               frames:11 bytes:1887
+      data                               frames:19 bytes:14346
 ```
 
-### 2. Starting DPDK testpmd with TAP Interfaces
+### 🔍 Traffic Summary Table
+
+| Protocol       | Frame Count |
+| -------------- | ----------- |
+| **TCP** (IPv4) | 14,274      |
+| **UDP** (IPv4) | 3,669       |
+| **UDP** (IPv6) | 1,393       |
+| **Total UDP**  | **5,062**   |
+| **ARP**        | 695         |
+| **IPv6**       | 1,657       |
+| **ICMPv6**     | 264         |
+
+**Note**: Only **UDP packets** are processed and forwarded in the final setup. TCP and other protocols are **dropped** due to the lack of applicable flow rules.
+
+---
+
+## 📘 Flow Rule Explanation
+
+The flow rules below direct traffic based on IP protocol type:
+
+```text
+flow create 0 ingress pattern eth / ipv4 / udp / end actions queue index 0 / end
+```
+
+* Port `0` (tap0)
+* Match incoming packets
+* Protocol stack: Ethernet → IPv4 → UDP
+* Action: send matched packets to **queue 0**
+
+```text
+flow create 1 ingress pattern eth / ipv4 / udp / end actions queue index 0 / end
+```
+
+* Port `1` (tap1)
+* Same logic for reverse direction
+
+🛑 **Important**: Additional rules were attempted for TCP and generic IPv4 traffic but rejected by the kernel:
+
+```text
+flow create 0 ingress pattern eth / ipv4 / tcp / end actions queue index 1 / end
+flow create 0 ingress pattern eth / ipv4 / end actions queue index 1 / end
+```
+
+These were denied with error `File exists`, indicating overlapping rules or limitations in `net_tap` + kernel flower classifier.
+
+🔎 **As a result:**
+
+* Only UDP packets matched and were forwarded via `queue 0`
+* All TCP or unmatched traffic was silently **dropped**
+
+---
+
+## ✅ Setup Summary
+
+* **DPDK Version**: 23.11
+* **OS**: Ubuntu Linux
+* **Tracing Tool**: LTTng (user-space tracing via `liblttng-ust-cyg-profile`)
+* **Interfaces**: `tap0` (input), `tap1` (output)
+* **Goal**: Forward UDP and other traffic via DPDK and trace function execution using LTTng UST with `cyg_profile` instrumentation.
+
+---
+
+## 📦 Step-by-Step Execution
+
+### 1. **Run `testpmd` with net\_tap driver and 2 queues per port**
 
 ```bash
 cd ~/dpdk-23.11
-
 sudo ./build/app/dpdk-testpmd -c 0xf -n 4 \
-  --vdev=net_tap0,iface=tap0 \
-  --vdev=net_tap1,iface=tap1 \
+  --vdev=net_tap0,iface=tap0,queues=2 \
+  --vdev=net_tap1,iface=tap1,queues=2 \
   -- \
   --port-topology=chained \
+  --nb-cores=3 \
+  --rxq=2 --txq=2 \
   --forward-mode=io \
-  --auto-start
+  --interactive
 ```
 
-#### Output Summary:
+### 2. **Inside `testpmd`, define flow rules**
 
+```text
+testpmd> flow create 0 ingress pattern eth / ipv4 / udp / end actions queue index 0 / end
+testpmd> flow create 1 ingress pattern eth / ipv4 / udp / end actions queue index 0 / end
 ```
-Logical Core 1 (socket 0) forwards packets on 2 streams:
-  RX P=0/Q=0 (socket 0) -> TX P=1/Q=0 (socket 0)
-  RX P=1/Q=0 (socket 0) -> TX P=0/Q=0 (socket 0)
 
-Forward statistics:
-Port 0: RX=22, TX=30
-Port 1: RX=30, TX=22
-Total RX=52, TX=52
+### 3. **Start forwarding**
+
+```text
+testpmd> start
 ```
 
 ---
 
-### 3. LTTng Trace Activation
+### 4. **Create and start LTTng session (with context)**
 
 ```bash
-sudo lttng destroy dpdk-final 2>/dev/null
-sudo lttng create dpdk-final
-sudo lttng enable-event --kernel --syscall --all
+sudo lttng destroy tap-trace 2>/dev/null
+sudo lttng create tap-trace
+sudo lttng enable-channel ust --userspace
+sudo lttng enable-event -u "lttng_ust_cyg_profile:*" --channel=ust
+sudo lttng add-context -u -t vpid -t vtid -t procname
 sudo lttng start
 ```
 
----
-
-### 4. Traffic Injection and Capture
-
-#### Run tcpdump to capture output on tap1:
+### 5. **Replay traffic using tcpreplay**
 
 ```bash
-sudo tcpdump -i tap1 -w pcapout.pcap
+sudo tcpreplay --intf1=dtap0 --loop=1000 /home/eagle/captures/test_capture.pcap
 ```
 
-*(run in background and stop with Ctrl+C after replay)*
-
-#### Replay pcap packet on tap0:
-
-```bash
-sudo tcpreplay -i tap0 input.pcap
-```
-
-Result:
-
-```
-1 packet sent successfully on tap0
-3 packets captured on tap1
-```
+Let it run for \~5 seconds, then stop it manually.
 
 ---
 
-### 5. Finalize LTTng Trace
+### 6. **Stop and destroy LTTng session**
 
 ```bash
 sudo lttng stop
 sudo lttng destroy
 ```
 
-### 6. Trace Analysis
-
-```bash
-sudo babeltrace /root/lttng-traces/dpdk-final-* | wc -l
-```
-
-Result:
+### 7. **Trace Output Folder**
 
 ```
-16923505 system call events captured
+/root/lttng-traces/tap-trace-20250526-205706/
+```
+
+Contains:
+
+* `ust_0`, `ust_1`, `ust_2`, `ust_3` (\~900 MB total)
+* `metadata`
+* `index/`
+
+These files can be loaded into **Trace Compass** for analysis.
+
+---
+
+## 🔍 Trace Compass Analysis
+
+Open the folder in Trace Compass:
+
+```text
+/root/lttng-traces/tap-trace-20250526-205706/
+```
+
+Enable and inspect:
+
+* **Flame Graph View** → Identify high-latency functions
+* **Control Flow View** → See core/thread mapping of execution
+* **Statistics View** → Function execution frequency
+* **Call Stack Table** → Nested function calls
+
+---
+
+## 📌 Notes
+
+* `dpdk-testpmd` was compiled with `-finstrument-functions` and linked to `liblttng-ust-cyg-profile`
+* The `meson.build` in `app/` was modified to include:
+
+```meson
+default_ldflags = ['-llttng-ust-cyg-profile']
 ```
 
 ---
 
-## Conclusion
+## ✅ Outcome
 
-The experiment successfully demonstrated packet forwarding using DPDK's `net_tap` PMD between two TAP interfaces and traced the corresponding system call activity using LTTng. The packet flow was verified using `tcpdump`, and over 16 million syscall events were recorded, confirming the system's runtime behavior.
-
-This setup provides a strong foundation for further kernel-level analysis, visualization in Trace Compass, or latency profiling.
-
-# 🧪 DPDK Packet Forwarding using `net_tap` PMD and Traffic Capture with `tshark`
-
-## ✅ Overview
-
-This report documents the successful setup, execution, and observation of a DPDK-based packet forwarding pipeline using the `net_tap` PMD. The test includes injecting a packet via `tap0`, forwarding it through `testpmd`, and capturing the result on `tap1` using `tshark`.
+* Successful packet forwarding via DPDK net\_tap
+* Function-level instrumentation captured via LTTng
+* Only UDP traffic forwarded (as per flow rule); other traffic dropped
+* Optimized trace (5 seconds, \~900 MB) ready for performance analysis
 
 ---
 
-## ⚙️ System Configuration
-
-- **DPDK Version:** 23.11  
-- **Operating System:** Ubuntu Linux  
-- **Tools Used:**  
-  - `Scapy` (packet generation)  
-  - `tcpreplay` (packet replay)  
-  - `testpmd` (DPDK application)  
-  - `tshark` (traffic capture)  
-- **Interfaces:**  
-  - `tap0` – input  
-  - `tap1` – output  
-
----
-
-## 🔧 Step-by-Step Execution
-
-### 1. Create an ICMP Packet with Scapy
-
-```python
-# File: create_pcap.py
-from scapy.all import Ether, IP, ICMP, wrpcap
-pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / IP(src="10.0.0.2", dst="10.0.0.1") / ICMP()
-wrpcap("input.pcap", [pkt])
-```
-
-Then run:
-
-```bash
-python3 create_pcap.py
-```
-
----
-
-### 2. Launch DPDK `testpmd` with TAP Interfaces
-
-```bash
-cd ~/dpdk-23.11
-
-sudo ./build/app/dpdk-testpmd -c 0xf -n 4 \
-  --vdev=net_tap0,iface=tap0 \
-  --vdev=net_tap1,iface=tap1 \
-  -- \
-  --port-topology=chained \
-  --forward-mode=io \
-  --auto-start
-```
-
-🔎 **Expected Output:**
-
-```
-Logical Core 1 (socket 0) forwards packets on 2 streams:
-  RX P=0 → TX P=1
-  RX P=1 → TX P=0
-
-Forward statistics:
-Port 0: RX=28, TX=26
-Port 1: RX=26, TX=28
-Total RX=54, TX=54
-```
-
-> Press `Ctrl+C` when ready to exit testpmd and stop packet forwarding.
-
----
-
-### 3. Start Capturing Packets with `tshark` on `tap1`
-
-```bash
-sudo tshark -i tap1 -w /tmp/tap1_capture.pcapng
-```
-
-> Leave this running and proceed to the next step in a new terminal window.
-
----
-
-### 4. Replay the ICMP Packet via `tap0`
-
-```bash
-sudo tcpreplay -i tap0 input.pcap
-```
-
-🔎 **Output:**
-
-```
-Warning: flow_decode: packet 1 needs at least 62 bytes for ICMP header but only 42 available
-Actual: 1 packets (42 bytes) sent in 0.000018 seconds
-Rated: 2333333.3 Bps, 18.66 Mbps, 55555.55 pps
-```
-
-Now stop `tshark` by pressing `Ctrl+C`.
-
----
-
-### 5. Inspect the Capture with `tshark`
-
-```bash
-sudo tshark -r /tmp/tap1_capture.pcapng
-```
-
-🔍 **Output:**
-
-```
-Running as user "root" and group "root". This could be dangerous.
-    1 0.000000000     10.0.0.2 → 10.0.0.1     ICMP 42 Echo (ping) request  id=0x0000, seq=0/0, ttl=64
-    2 44.111859034 fe80::2c29:1dff:fe89:14cc → ff02::2      ICMPv6 70 Router Solicitation ...
-    3 52.720576332 fe80::1818:8cff:fe18:e8eb → ff02::fb     MDNS 203 Standard query ...
-    4 53.104617958 fe80::2c29:1dff:fe89:14cc → ff02::fb     MDNS 203 Standard query ...
-    5 54.359876773 fe80::1818:8cff:fe18:e8eb → ff02::2      ICMPv6 70 Router Solicitation ...
-```
-
----
-
-## 📁 Output Files
-
-| File Path                     | Description                            |
-|------------------------------|----------------------------------------|
-| `input.pcap`                 | Generated ICMP packet for replay       |
-| `/tmp/tap1_capture.pcapng`   | Captured packets on TAP interface      |
-
----
-
-## ✅ Summary
-
-This experiment confirms that:
-
-- DPDK successfully forwarded packets via the `net_tap` driver.
-- `tshark` correctly captured traffic from the `tap1` interface.
-- The injected ICMP packet and system-generated ICMPv6/MDNS traffic were observable in the resulting `.pcapng` file.
-
-This setup is ideal for tracing and debugging DPDK pipelines in virtualized environments, using kernel interfaces and software-based NIC emulation.
+This trace can now be archived, shared, or referenced in further analysis or performance tuning sessions.
 
 

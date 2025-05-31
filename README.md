@@ -135,3 +135,20 @@ This section presents the analysis of the first trace visualization using **Flam
 
 #### 💡 Conclusion:
 The transmit path, especially memory handling and mbuf recycling, constitutes the main performance bottleneck in this trace. Further analysis with the Statistics View will help confirm these findings by measuring function call frequencies and average durations.
+
+## 📊 Analysis with Trace Compass  
+### 🔁 Flame Chart – Multi-Core Packet Reception View
+
+This visualization shows a **Flame Chart** focused on the `pkt_burst_io_forward` function across multiple DPDK worker threads (`dpdk-worker1`, `dpdk-worker2`, and `dpdk-worker3`).
+
+#### 🔍 Key Observations:
+- All three worker threads are actively executing `common_fwd_stream_receive` followed by `rte_eth_rx_burst`.
+- The consistent pattern across threads indicates a **balanced distribution of RX load**, with no significant idle gaps.
+- Each invocation of `rte_eth_rx_burst` is immediately followed by interactions with `rte_ethdev_trace_rx`, suggesting successful and tight RX path instrumentation.
+- The hexadecimal label `0x55743cf241f5` represents the actual function address and is repeated, denoting multiple calls to the same function instance (instrumented with `cyg_profile`).
+- The close alignment of function blocks suggests low variance in RX handling latency between threads.
+
+#### 💡 Conclusion:
+This chart confirms that the `dpdk-testpmd` application evenly distributes the packet reception workload across available threads. The RX path, specifically `rte_eth_rx_burst`, is functioning efficiently and in parallel across cores, which is ideal for performance scalability.
+
+Further insights can be obtained by zooming in on the time axis to calculate microsecond-level latency between function entries.

@@ -122,7 +122,7 @@ sudo lttng destroy
 
 * This captures all user-space function calls and essential performance metrics.
 * Run the script while traffic is being replayed.
-##  
+##  📊 Analysis with Trace Compass  
 ### 🔥 Flame Graph – Function-Level Execution Time Distribution
 
 This section presents the analysis of the first trace visualization using **Flame Graph** in Trace Compass. The Flame Graph highlights the relative execution time of user-space functions during the runtime of `dpdk-testpmd` with `net_tap`.
@@ -136,7 +136,7 @@ This section presents the analysis of the first trace visualization using **Flam
 #### 💡 Conclusion:
 The transmit path, especially memory handling and mbuf recycling, constitutes the main performance bottleneck in this trace. Further analysis with the Statistics View will help confirm these findings by measuring function call frequencies and average durations.
 
-## 📊 Analysis with Trace Compass  
+## 
 ### 🔁 Flame Chart – Multi-Core Packet Reception View
 
 This visualization shows a **Flame Chart** focused on the `pkt_burst_io_forward` function across multiple DPDK worker threads (`dpdk-worker1`, `dpdk-worker2`, and `dpdk-worker3`).

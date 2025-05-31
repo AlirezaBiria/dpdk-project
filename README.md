@@ -301,3 +301,114 @@ Although `common_fwd_stream_receive` is a simple and inline wrapper, it becomes 
 - Tracing activity (function instrumentation via LTTng)
 
 This function consistently ranks high in Trace Compass overhead analysis and should be considered a critical point in performance studies.
+
+## 🔍 Function Analysis – `rte_eth_rx_burst`
+
+### 📁 How to Locate the Function
+
+To find the implementation of `rte_eth_rx_burst`, follow these steps:
+
+1. Go to the ethdev library directory:
+   ```bash
+   cd ~/dpdk-23.11/lib/ethdev
+   ```
+
+2. Search for the function definition using `grep`:
+   ```bash
+   grep -rn "rte_eth_rx_burst" rte_ethdev.h
+   ```
+
+3. You will find the function defined at or near line 6045 in `rte_ethdev.h`:
+   ```
+   rte_ethdev.h:6045:rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id, ...
+   ```
+
+4. Open the file at that line to view the full function:
+   ```bash
+   nano +6045 rte_ethdev.h
+   ```
+
+---
+
+### 📄 Full Function Code
+
+```c
+static inline uint16_t
+rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
+                 struct rte_mbuf **rx_pkts, const uint16_t nb_pkts)
+{
+    uint16_t nb_rx;
+    struct rte_eth_fp_ops *p;
+    void *qd;
+
+    p = &rte_eth_fp_ops[port_id];
+    qd = p->rxq.data[queue_id];
+
+    nb_rx = p->rx_pkt_burst(qd, rx_pkts, nb_pkts);
+
+#ifdef RTE_ETHDEV_RXTX_CALLBACKS
+    void *cb = rte_atomic_load_explicit(&p->rxq.clbk[queue_id],
+                                        rte_memory_order_relaxed);
+    if (unlikely(cb != NULL))
+        nb_rx = rte_eth_call_rx_callbacks(port_id, queue_id,
+                                          rx_pkts, nb_rx, nb_pkts, cb);
+#endif
+
+    rte_ethdev_trace_rx_burst(port_id, queue_id, (void **)rx_pkts, nb_rx);
+    return nb_rx;
+}
+```
+
+---
+
+### ⚠️ Why It Has Overhead
+
+| Component | Source of Overhead | Description |
+|-----------|---------------------|-------------|
+| `p->rx_pkt_burst(...)` | 🔺 **High** | This is a driver function pointer, which calls into the actual PMD (e.g., `tap_recv_pkts`). Most of the processing time is consumed here. |
+| Callback logic | 🔸 **Conditional** | If any RX callbacks are registered, additional processing occurs. |
+| Trace hook | 🔹 **Low** | Involves user-space trace instrumentation; small but visible in function trace views. |
+| Function pointer usage | 🔹 **Moderate** | Indirection adds minor latency due to reduced compiler optimization/inlining. |
+
+---
+
+### 🧠 Summary & Analysis
+
+The `rte_eth_rx_burst` function is a **thin wrapper** that delegates actual packet reception to the underlying driver (PMD). On its own, it doesn’t introduce significant overhead, but since it is executed **frequently** in every RX path, it appears prominently in function-level traces.
+
+Its call to `p->rx_pkt_burst(...)` is where the **real work and cost** occur. In most cases, this delegates to `tap_recv_pkts` for the `net_tap` device, which performs memory allocation and a system call (`read()`), both of which are expensive.
+
+🔎 Therefore, while `rte_eth_rx_burst` itself is lightweight, its high call frequency and delegation to costly driver functions make it **an important transition point** in tracing and overhead analysis.
+
+## 🧩 Final Insight: Root Cause of Overhead – `rx_pkt_burst`
+
+During our analysis, we observed that the **core source of execution overhead** in the RX path is the function pointer:
+
+```c
+nb_rx = p->rx_pkt_burst(qd, rx_pkts, nb_pkts);
+```
+
+This function pointer is resolved at runtime to the actual driver implementation (e.g., `tap_recv_pkts` for the `net_tap` PMD). Here’s why this call introduces significant performance cost:
+
+### ⚙️ What Happens Under the Hood
+
+1. **Driver-specific packet reception**  
+   The function eventually calls into the PMD driver, which performs:
+   - `read()` syscall on `/dev/net/tun` or `tap` interface
+   - buffer allocation (`rte_pktmbuf_alloc`)
+   - packet parsing and copying into mbufs
+
+2. **User-kernel transitions**  
+   The read operation causes a context switch between user-space and kernel-space, which is inherently expensive.
+
+3. **High call frequency**  
+   Even a lightweight function, when called tens of thousands of times per second, results in visible impact on Flame Graphs and system traces.
+
+---
+
+### 🔎 Conclusion
+
+While `rte_eth_rx_burst()` appears as a lightweight API wrapper, it is a **gateway to a much heavier operation**. The actual cost lies in the function behind `rx_pkt_burst`, typically in PMDs like `tap_recv_pkts`. Thus, most of the observed overhead in function tracing originates from this indirect call.
+
+📌 **Optimization Recommendation:**  
+Any attempt to reduce RX path latency should focus on the internals of the `rx_pkt_burst()` implementation — especially syscalls, memory allocation, and batching behavior.

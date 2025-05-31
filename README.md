@@ -122,3 +122,16 @@ sudo lttng destroy
 
 * This captures all user-space function calls and essential performance metrics.
 * Run the script while traffic is being replayed.
+## 📊 Analysis with Trace Compass  
+### 🔥 Flame Graph – Function-Level Execution Time Distribution
+
+This section presents the analysis of the first trace visualization using **Flame Graph** in Trace Compass. The Flame Graph highlights the relative execution time of user-space functions during the runtime of `dpdk-testpmd` with `net_tap`.
+
+#### 🔍 Key Observations:
+- The function `common_fwd_stream_transmit` accounts for a large portion of total execution time, indicating its central role in packet forwarding.
+- Significant overhead is also observed in `rte_eth_tx_burst` and memory-related functions such as `rte_pktmbuf_free_seg` and `rte_mempool_put_bulk`.
+- Functions prefixed with `rte_mempool_trace_` suggest noticeable time spent managing the local mempool cache.
+- In contrast, the receive path (`common_fwd_stream_receive`, `rte_eth_rx_burst`) appears to contribute less overhead than the transmit path.
+
+#### 💡 Conclusion:
+The transmit path, especially memory handling and mbuf recycling, constitutes the main performance bottleneck in this trace. Further analysis with the Statistics View will help confirm these findings by measuring function call frequencies and average durations.

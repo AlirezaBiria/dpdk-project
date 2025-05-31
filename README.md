@@ -122,7 +122,7 @@ sudo lttng destroy
 
 * This captures all user-space function calls and essential performance metrics.
 * Run the script while traffic is being replayed.
-## 📊 Analysis with Trace Compass  
+##  
 ### 🔥 Flame Graph – Function-Level Execution Time Distribution
 
 This section presents the analysis of the first trace visualization using **Flame Graph** in Trace Compass. The Flame Graph highlights the relative execution time of user-space functions during the runtime of `dpdk-testpmd` with `net_tap`.

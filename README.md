@@ -179,3 +179,17 @@ This chart shows a histogram of function execution durations across all traced e
 
 #### 💡 Conclusion:
 This view helps detect outliers and variability in function execution time. Although the general performance is tight and fast, a few longer-duration calls may warrant further inspection if they align with critical path functions.
+
+## 
+### 🌲 Weighted Tree View – Function Call Tree with Timing Metrics
+
+This view shows a full call tree for a DPDK worker thread (`dpdk-worker3-5026`), with each function's total and self execution time.
+
+#### 🔍 Key Observations:
+- The function `common_fwd_stream_receive` dominates with **950 ms total time**, followed by `rte_eth_rx_burst` and `rte_ethdev_trace_rx_burst`.
+- The `__rte_trace_point_fp_is_enabled` function appears frequently, reflecting the internal overhead added by LTTng's UST instrumentation.
+- Memory allocation routines such as `rte_mempool_get_bulk`, `rte_pktmbuf_alloc`, and related trace functions show up with lower call counts (52 calls) but non-negligible duration.
+- All functions are executed within the scope of the top-level function at address `0x55743cf241f5`.
+
+#### 💡 Conclusion:
+This tree highlights the RX path (`rte_eth_rx_burst` and its children) as the main execution hotspot. Tracing and memory pool access contribute significantly to the cumulative time. These areas are prime candidates for deeper profiling and possible optimization.

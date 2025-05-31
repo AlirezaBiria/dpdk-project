@@ -193,3 +193,20 @@ This view shows a full call tree for a DPDK worker thread (`dpdk-worker3-5026`),
 
 #### 💡 Conclusion:
 This tree highlights the RX path (`rte_eth_rx_burst` and its children) as the main execution hotspot. Tracing and memory pool access contribute significantly to the cumulative time. These areas are prime candidates for deeper profiling and possible optimization.
+
+## 
+### 🧪 Hardware Counter Analysis – TID 5024 (Single Thread View)
+
+This chart shows performance counters for DPDK thread `TID 5024`, specifically:
+
+- `thread_cpu_cycles` (green)
+- `thread_instructions` (purple)
+- `thread_cache_misses` (magenta)
+
+#### 🔍 Key Observations:
+- Instructions are executed steadily over time, with minimal fluctuation, indicating stable workload execution.
+- CPU cycles closely follow instructions, showing a balanced execution pipeline.
+- Cache misses are low and stable, implying efficient memory usage and good cache locality.
+
+#### 💡 Conclusion:
+TID 5024 exhibits efficient, predictable, and cache-friendly behavior. No signs of performance stalls or memory bottlenecks are detected in this thread.

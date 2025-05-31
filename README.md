@@ -140,8 +140,7 @@ These were denied with error `File exists`, indicating overlapping rules or limi
 ### 1. **Run `testpmd` with net\_tap driver and 2 queues per port**
 
 ```bash
-cd ~/dpdk-23.11
-sudo ./build/app/dpdk-testpmd -c 0xf -n 4 \
+sudo -E LD_PRELOAD=liblttng-ust-cyg-profile.so ./build/app/dpdk-testpmd -c 0xf -n 4 \
   --vdev=net_tap0,iface=tap0,queues=2 \
   --vdev=net_tap1,iface=tap1,queues=2 \
   -- \
@@ -150,6 +149,7 @@ sudo ./build/app/dpdk-testpmd -c 0xf -n 4 \
   --rxq=2 --txq=2 \
   --forward-mode=io \
   --interactive
+
 ```
 
 ### 2. **Inside `testpmd`, define flow rules**

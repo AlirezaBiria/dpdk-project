@@ -152,3 +152,30 @@ This visualization shows a **Flame Chart** focused on the `pkt_burst_io_forward`
 This chart confirms that the `dpdk-testpmd` application evenly distributes the packet reception workload across available threads. The RX path, specifically `rte_eth_rx_burst`, is functioning efficiently and in parallel across cores, which is ideal for performance scalability.
 
 Further insights can be obtained by zooming in on the time axis to calculate microsecond-level latency between function entries.
+
+##  
+### 📈 Function Duration Statistics – Execution Time Breakdown
+
+This table presents statistical data on the duration of user-space functions during DPDK execution, as captured by LTTng with `cyg_profile`.
+
+#### 🔍 Key Observations:
+- `rte_constant_bswap16` appears at the top with 756 calls and a total execution time of ~524 μs.
+- Several functions such as `rte_pktmbuf_headroom`, `rte_mempool_trace_put_bulk`, and `__rte_mbuf_raw_sanity_check` exhibit relatively high average execution times.
+- `__rte_trace_point_fp_is_enabled` was called over 324,000 times, indicating a trace-related overhead that may influence performance measurements.
+- The `pmd_rx_burst` function was executed over 322,000 times, highlighting its role as a central and frequently executed component in the RX path.
+
+#### 💡 Conclusion:
+This statistical view complements the Flame Graph by providing precise metrics for optimization. Functions with high average durations or excessive call counts are ideal candidates for profiling and performance tuning.
+
+##  
+### 📉 Function Durations Distribution – Histogram of Execution Time
+
+This chart shows a histogram of function execution durations across all traced events. It helps identify whether most functions execute quickly or if there are outliers with high latency.
+
+#### 🔍 Key Observations:
+- The majority of functions executed within the **1–3 µs** range, indicating highly efficient execution in most cases.
+- A few functions (e.g., `rte_eth_rx_burst`, `pmd_rx_burst`, `common_fwd_stream_receive`) show higher durations (up to 10 µs), which may be caused by transient delays.
+- The `__rte_trace_point_fp_is_enabled` function appears across various durations, revealing some overhead due to tracing itself.
+
+#### 💡 Conclusion:
+This view helps detect outliers and variability in function execution time. Although the general performance is tight and fast, a few longer-duration calls may warrant further inspection if they align with critical path functions.

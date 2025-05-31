@@ -210,3 +210,25 @@ This chart shows performance counters for DPDK thread `TID 5024`, specifically:
 
 #### 💡 Conclusion:
 TID 5024 exhibits efficient, predictable, and cache-friendly behavior. No signs of performance stalls or memory bottlenecks are detected in this thread.
+
+## 🚦 Overhead Analysis – Top Functions with Highest Impact
+
+This section summarizes the top functions contributing to execution overhead in the DPDK + net_tap + LTTng tracing scenario. The list is sorted by **descending overhead impact**, based on duration, frequency, and trace tree analysis.
+
+| Rank | Function Name                        | Role                                | Overhead Indicators                            | Notes |
+|------|--------------------------------------|-------------------------------------|-------------------------------------------------|-------|
+| 1    | `common_fwd_stream_receive`          | Main forwarding logic (RX path)     | 🟢 Very high total duration (~950 ms)<br>🟢 Includes all RX/mempool subcalls | Dominant node in flame/tree views |
+| 2    | `rte_eth_rx_burst`                   | Burst receive from NIC              | 🟢 High frequency<br>🟢 Significant duration     | Core of packet processing loop |
+| 3    | `rte_ethdev_trace_rx_burst`          | Tracing wrapper for RX              | 🟢 Long cumulative duration<br>🟢 Appears under every RX | Tracing-induced overhead |
+| 4    | `__rte_trace_point_fp_is_enabled`    | LTTng instrumentation logic         | 🔴 Over 324,000 calls<br>🟢 Appears in many stack layers | Significant UST overhead |
+| 5    | `rte_mempool_get_bulk`               | Bulk buffer allocation              | 🟢 Long self time<br>🟢 Appears frequently       | Memory pool performance-sensitive |
+| 6    | `rte_pktmbuf_alloc` / `rte_mbuf_raw_alloc` | Buffer allocation from mempool | 🟡 Moderate duration<br>🟢 Frequent in RX path   | Allocation latency bottleneck |
+| 7    | `pmd_rx_burst`                       | PMD-level RX handler                | 🟢 High frequency<br>🟡 Moderate duration        | Appears repeatedly in RX path |
+
+---
+
+### 🧠 Conclusion:
+
+- **RX path dominates performance cost**, especially due to buffer handling and tracing overhead.
+- **LTTng’s instrumentation functions** (especially `__rte_trace_point_fp_is_enabled`) add measurable tracing cost and may be optimized in production builds.
+- **Memory allocation** and `mempool` access are critical performance points.

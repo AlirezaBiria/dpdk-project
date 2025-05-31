@@ -232,3 +232,72 @@ This section summarizes the top functions contributing to execution overhead in 
 - **RX path dominates performance cost**, especially due to buffer handling and tracing overhead.
 - **LTTng’s instrumentation functions** (especially `__rte_trace_point_fp_is_enabled`) add measurable tracing cost and may be optimized in production builds.
 - **Memory allocation** and `mempool` access are critical performance points.
+
+## 🔍 Function Analysis – `common_fwd_stream_receive`
+
+### 📁 Location
+
+This function is defined in the following file:
+
+```
+dpdk-23.11/app/test-pmd/testpmd.h
+```
+
+To locate it quickly, run:
+
+```bash
+cd ~/dpdk-23.11
+grep -rn "common_fwd_stream_receive" app/test-pmd/
+nano app/test-pmd/testpmd.h
+```
+
+---
+
+### 📄 Function Definition (with inline comments)
+
+```c
+// Inline function to receive a burst of packets from a specific RX port/queue.
+static inline uint16_t
+common_fwd_stream_receive(struct fwd_stream *fs, struct rte_mbuf **burst,
+                          unsigned int nb_pkts)
+{
+    uint16_t nb_rx;
+
+    // 🔁 Try to receive up to nb_pkts from the RX queue of the given stream
+    nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, burst, nb_pkts);
+
+    // 📊 Optionally update per-burst statistics if enabled
+    if (record_burst_stats)
+        fs->rx_burst_stats.pkt_burst_spread[nb_rx]++;
+
+    // ➕ Update total RX packet count
+    fs->rx_packets += nb_rx;
+
+    // 📤 Return the number of received packets
+    return nb_rx;
+}
+```
+
+---
+
+### 🔬 Performance & Overhead Analysis
+
+| Factor | Explanation |
+|--------|-------------|
+| 🔁 **High Call Frequency** | This function is called once per RX burst inside the main loop. With high packet rates, it is executed millions of times. |
+| 📦 **Relies on `rte_eth_rx_burst`** | The heavy lifting is done by the DPDK API `rte_eth_rx_burst`, which interacts with the actual driver (e.g., `tap_recv_pkts`). |
+| 🧠 **Tracing Overhead** | When LTTng tracing is active with `cyg_profile`, each function call logs entry/exit, introducing measurable runtime cost. |
+| 📊 **Optional Statistics Update** | If `record_burst_stats` is enabled, this introduces memory access and cache pressure. |
+| 🔥 **Hotspot in Tracing** | Because of its central role and frequency, it appears as one of the top contributors in flame graphs and function duration views in Trace Compass. |
+
+---
+
+### 🧠 Summary
+
+Although `common_fwd_stream_receive` is a simple and inline wrapper, it becomes a top overhead source due to:
+
+- Very frequent execution inside the packet processing loop
+- Indirect delegation to lower-level RX functions
+- Tracing activity (function instrumentation via LTTng)
+
+This function consistently ranks high in Trace Compass overhead analysis and should be considered a critical point in performance studies.

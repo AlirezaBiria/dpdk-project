@@ -502,9 +502,9 @@ The majority of the overhead in `pmd_rx_burst` comes from:
 
 
 
-   ####### A[common_fwd_stream_receive] --> B[rte_eth_rx_burst]
-   ####### B --> C[rx_pkt_burst (function pointer)]
-   ####### C --> D[pmd_rx_burst]
-   ####### D --> E[readv() syscall]
+   ###### A[common_fwd_stream_receive] --> B[rte_eth_rx_burst]
+   ###### B --> C[rx_pkt_burst (function pointer)]
+   ###### C --> D[pmd_rx_burst]
+   ###### D --> E[readv() syscall]
 
 

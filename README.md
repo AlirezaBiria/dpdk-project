@@ -500,21 +500,11 @@ The majority of the overhead in `pmd_rx_burst` comes from:
 
 #### 📈 Overhead Path
 
-
+‍‍‍```
 graph TD
     A[common_fwd_stream_receive] --> B[rte_eth_rx_burst]
     B --> C[rx_pkt_burst (function pointer)]
     C --> D[pmd_rx_burst]
     D --> E[readv() syscall]
 ```
-
-The tracing analysis via LTTng and Trace Compass shows that the **majority of execution time** in the receive path is concentrated in `pmd_rx_burst`, due to the above issues.
-
----
-
-#### ✅ Recommendations for Optimization
-
-- **Minimize syscalls**: Avoid calling `readv()` per packet. Batch reads or use polling where possible.
-- **Pre-allocate mbufs**: Avoid dynamic allocation per packet, use a pre-filled mbuf ring.
-- **Offload aggregation**: If feasible, offload packet merge/assembly earlier in the stack or at kernel level.
 

@@ -412,3 +412,109 @@ While `rte_eth_rx_burst()` appears as a lightweight API wrapper, it is a **gatew
 
 📌 **Optimization Recommendation:**  
 Any attempt to reduce RX path latency should focus on the internals of the `rx_pkt_burst()` implementation — especially syscalls, memory allocation, and batching behavior.
+
+### 🔧 Analysis and Optimization Suggestions for `rx_pkt_burst` Overhead
+
+#### 🧩 Functional Role
+The function `rx_pkt_burst` is not a standalone implementation but a function pointer located within the `rte_eth_fp_ops` structure. At runtime, for the `net_tap` driver, this pointer is bound to the function `tap_recv_pkts`, which is the actual implementation responsible for receiving packets via the kernel TAP interface.
+
+```c
+.rx_pkt_burst = tap_recv_pkts,
+```
+
+This means every call to `rte_eth_rx_burst(...)` eventually triggers:
+
+```text
+rte_eth_rx_burst → rx_pkt_burst → tap_recv_pkts → read()
+```
+
+The `tap_recv_pkts` function internally relies on the `read()` syscall to retrieve packets from the TAP interface, introducing substantial **overhead due to context switching and kernel-user copy** operations.
+
+#### 📉 Identified Overhead
+Based on our function-level tracing using LTTng and Trace Compass, `rx_pkt_burst` emerged as one of the top contributors to overall execution latency. This overhead is directly inherited from `tap_recv_pkts`, making it a primary performance bottleneck in the receive path of the testpmd pipeline.
+
+#### ✅ Optimization Recommendations
+
+To reduce the performance cost of `rx_pkt_burst` (and implicitly `tap_recv_pkts`), we propose the following strategies:
+
+| Optimization | Description | Impact |
+|--------------|-------------|--------|
+| Replace `net_tap` with `memif` or `af_xdp` | Use high-performance user-space drivers that bypass the kernel and eliminate syscalls like `read()` | Drastically lowers latency and CPU usage |
+| Increase `nb_pkt_per_burst` | Set higher burst sizes (e.g., 32 or 64 packets per call) to amortize syscall overhead | Reduces function call frequency |
+| Disable `record_burst_stats` | Avoid unnecessary memory writes per RX burst | Minimizes additional overhead in `common_fwd_stream_receive` |
+| Use `ring` PMD for local communication | Switch to ring-based PMDs for test environments where TAP is not essential | Avoids kernel interaction entirely |
+
+#### 🚀 Conclusion
+
+The `rx_pkt_burst` function is effectively a gateway to the kernel's TAP subsystem via `tap_recv_pkts`. This tight coupling to the `read()` syscall explains the high overhead observed during function tracing. Replacing `net_tap` with a user-space, zero-copy alternative or tuning burst parameters can significantly improve performance in DPDK-based pipelines.
+
+### 🔍 Analysis of TAP Receive Path Overhead in DPDK
+
+#### 📌 Function: `pmd_rx_burst`
+
+This function is the low-level receive routine of the `net_tap` PMD driver, which is invoked indirectly through the DPDK forwarding pipeline. Here's the implementation:
+
+```c
+pmd_rx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
+{
+    struct rx_queue *rxq = queue;
+    struct pmd_process_private *process_private;
+    uint16_t num_rx;
+    unsigned long num_rx_bytes = 0;
+    uint32_t trigger = tap_trigger;
+
+    if (trigger == rxq->trigger_seen)
+        return 0;
+
+    process_private = rte_eth_devices[rxq->in_port].process_private;
+    for (num_rx = 0; num_rx < nb_pkts; ) {
+        ...
+        len = readv(process_private->rxq_fds[rxq->queue_id],
+                    *rxq->iovecs,
+                    1 + (rxq->rxmode->offloads & RTE_ETH_RX_OFFLOAD_SCATTER ?
+                         rxq->nb_rx_desc : 1));
+        ...
+        bufs[num_rx++] = mbuf;
+        num_rx_bytes += mbuf->pkt_len;
+    }
+
+    rxq->stats.ipackets += num_rx;
+    rxq->stats.ibytes += num_rx_bytes;
+
+    if (trigger && num_rx < nb_pkts)
+        rxq->trigger_seen = trigger;
+
+    return num_rx;
+}
+```
+
+#### ⚙️ Overhead Analysis
+
+The majority of the overhead in `pmd_rx_burst` comes from:
+
+- **System Call `readv()`**: Reading from the TAP interface is a blocking or semi-blocking syscall, which introduces context switch overhead and latency.
+- **Memory Allocation (`rte_pktmbuf_alloc`)**: Frequent dynamic allocation of mbufs inside the inner loop can degrade performance, especially when burst size is high.
+- **Pointer Chaining and Segment Management**: When dealing with scatter-gather or fragmented packets, the linked-list structure of segments increases processing time.
+
+---
+
+#### 📈 Function Call Graph (Overhead Path)
+
+```mermaid
+graph TD
+    A[common_fwd_stream_receive] --> B[rte_eth_rx_burst]
+    B --> C[rx_pkt_burst (function pointer)]
+    C --> D[pmd_rx_burst]
+    D --> E[readv() syscall]
+```
+
+The tracing analysis via LTTng and Trace Compass shows that the **majority of execution time** in the receive path is concentrated in `pmd_rx_burst`, due to the above issues.
+
+---
+
+#### ✅ Recommendations for Optimization
+
+- **Minimize syscalls**: Avoid calling `readv()` per packet. Batch reads or use polling where possible.
+- **Pre-allocate mbufs**: Avoid dynamic allocation per packet, use a pre-filled mbuf ring.
+- **Offload aggregation**: If feasible, offload packet merge/assembly earlier in the stack or at kernel level.
+

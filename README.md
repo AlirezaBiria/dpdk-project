@@ -45,6 +45,22 @@ This report documents the successful execution and function-level tracing of a D
 
 ---
 
+```
+pkt_burst_io_forward
+└── common_fwd_stream_receive
+    └── rte_eth_rx_burst
+        └── pmd_rx_burst
+            └── [0x562ae08ee1f4]   ⬅️ tap_recv_pkts (readv) (from tap0 to testpmd(net_tap))
+                ├── rte_pktmbuf_alloc
+                │   └── rte_mbuf_raw_alloc
+                │       └── rte_mempool_get_bulk
+                ├── __rte_trace_point_fp_is_enabled
+                └── ...
+```
+
+
+
+
 ### 🧠 Scenario Overview
 
 We simulate a realistic packet forwarding pipeline using two TAP interfaces and enable full function-level tracing using LTTng. The execution flow consists of:

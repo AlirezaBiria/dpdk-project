@@ -674,3 +674,43 @@ The Flame Chart confirms that **TCP traffic is evenly distributed and processed 
 This pattern is similar to the UDP-only scenario, but block durations suggest that **per-burst processing time for TCP is slightly higher**, likely due to packet size and mempool allocation cost.
 
 In the next section, we will examine **statistical duration metrics** for functions to quantify these performance characteristics.
+
+## 📊 Function Duration Statistics – Execution Time Breakdown (TCP-Only)
+
+This table summarizes the function-level execution durations as measured by LTTng with `cyg_profile` during the TCP-only scenario. It includes the minimum, maximum, and average execution times, standard deviation, number of invocations (Count), and total accumulated time (Total) for each function.
+
+### 🔍 Key Observations:
+
+- **Top function by call count**:  
+  - The function at address `0x562ae173d9b3` was invoked **5.48 million times** and consumed a total of **23.4 seconds**, averaging **4.3 μs** per call.  
+  - This is likely a core RX path function (possibly inlined `rte_eth_rx_burst` or similar).
+
+- **High total duration functions**:
+  - `__rte_trace_point_fp_is_enabled` → 443,503 calls → **316 ms total**  
+    → This is a tracepoint instrumentation overhead introduced by LTTng.
+  - `0x562ae08ef2d3` → 469,990 calls → **360 ms total**  
+    → Likely `tap_recv_pkts` or its wrapper, showing it’s a dominant runtime cost.
+
+- **pmd_rx_burst** → 44,695 calls, avg. **724 ns**, total **319 ms**  
+  → Consistently contributes significant RX cost.
+
+- **Memory allocation overhead**:
+  - Functions like `rte_pktmbuf_headroom`, `rte_pktmbuf_reset_headroom`, `rte_mbuf_raw_alloc`, and `rte_mempool_get_bulk` appear prominently with average durations in the range of **0.6–0.8 μs**.
+  - These functions account for the bulk of per-packet processing cost during TCP handling.
+
+- **Trace overhead functions**:
+  - `__rte_trace_point_fp_is_enabled`, `rte_mempool_trace_default_cache`, and similar instrumentation helpers are clearly visible and contribute measurable runtime impact.
+
+---
+
+### 💡 Conclusion:
+
+This statistical view confirms the findings from the Flame Graph and Flame Chart:
+
+- **The receive path remains the main performance hotspot**, with `tap_recv_pkts` and `pmd_rx_burst` contributing significantly to overall latency.
+- **Memory operations** (allocation, reset, headroom calculation) account for hundreds of microseconds of cumulative time, especially due to high invocation counts.
+- **Tracing itself adds overhead** — visible via the high call frequency of `__rte_trace_point_fp_is_enabled`.
+
+Compared to the UDP-only scenario, the TCP case shows **longer average function durations** and **larger total time per function**, highlighting that TCP packet processing, even without kernel stack involvement, leads to greater user-space processing overhead in DPDK.
+
+➡️ Next, we’ll examine the Weighted Tree View to understand the hierarchical structure of function calls and determine the dominant paths in the TCP-only execution trace.

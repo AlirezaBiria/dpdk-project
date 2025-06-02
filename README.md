@@ -644,3 +644,33 @@ Compared to the previous UDP-only Flame Graph, the TCP-only trace exhibits:
 - Potential increase in per-packet processing cost due to larger TCP headers and more complex mbuf handling.
 
 This Flame Graph confirms that under TCP-only forwarding, memory operations and PMD driver interactions are the main contributors to runtime overhead. Further insights will be derived in the next sections using function duration statistics, counters, and weighted tree views.
+
+## 🔁 Flame Chart – Multi-Core Packet Reception View (TCP-Only)
+
+This Flame Chart presents a timeline-based view of function execution across multiple DPDK worker threads during TCP-only forwarding. Each row corresponds to a thread (`dpdk-worker1`, `dpdk-worker2`, `dpdk-worker3`), and function calls are shown with their durations across the time axis.
+
+### 🔍 Key Observations:
+
+- All three worker threads (`dpdk-worker1`, `dpdk-worker2`, and `dpdk-worker3`) actively execute:
+  - `pkt_burst_io_forward`
+  - `common_fwd_stream_receive`
+  - `rte_eth_rx_burst`
+  - `pmd_rx_burst` or related PMD RX symbols (`0x562ae08ee1f4`)
+
+- The **execution pattern is consistent** across cores, with each thread repeatedly processing the RX path in a loop — suggesting a well-balanced load.
+
+- The presence of **uniform function blocks** with little variation in length indicates **low latency variance** and predictable execution cycles for each burst of TCP packets.
+
+- The symbol `0x562ae08ee1f4` appears frequently just after `rte_eth_rx_burst`. This corresponds to the actual PMD driver function for `net_tap`, i.e., `tap_recv_pkts`, and confirms successful tracing of PMD-level processing even for TCP packets.
+
+- Each call to `rte_eth_rx_burst` is immediately followed by its deeper stack components (memory allocation, mempool interaction), even though they’re not expanded in this chart.
+
+---
+
+### 💡 Conclusion:
+
+The Flame Chart confirms that **TCP traffic is evenly distributed and processed across all worker threads**, with no observable load imbalance or idle periods. The RX loop (`common_fwd_stream_receive → rte_eth_rx_burst → tap_recv_pkts`) is consistently repeated across all threads, ensuring maximum CPU utilization.
+
+This pattern is similar to the UDP-only scenario, but block durations suggest that **per-burst processing time for TCP is slightly higher**, likely due to packet size and mempool allocation cost.
+
+In the next section, we will examine **statistical duration metrics** for functions to quantify these performance characteristics.

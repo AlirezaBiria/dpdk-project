@@ -2,6 +2,47 @@
 
 This report documents the successful execution and function-level tracing of a DPDK-based packet forwarding scenario using the `net_tap` PMD, with comprehensive instrumentation and user-space tracing enabled via LTTng.
 
+## 📚 Table of Contents
+
+| Section No. | Section Title                                                  | Description                                                       |
+| ----------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
+| 1           | 🧠 Scenario Overview                                           | Describes the architecture, goals, and tracing approach           |
+| 2           | 📦 PCAP File Content Summary                                   | Breakdown of traffic used in forwarding (UDP/TCP mix)             |
+| 3           | 📘 Part I – UDP-Only Rule Configuration and Execution          | Flow rules, setup, and analysis based on forwarding only UDP      |
+| 4           | 📘 Part II – TCP-Only Rule Configuration and Execution         | Flow rules, setup, and analysis based on forwarding only TCP      |
+| 5           | 🔥 Flame Graph (UDP & TCP)                                     | Function execution time distribution view                         |
+| 6           | 🔁 Flame Chart – Multi-Core View                               | Thread-wise timeline of function execution                        |
+| 7           | 📈 Function Duration Statistics                                | Call count, min/max/avg, and total time per function              |
+| 8           | 📉 Function Duration Histogram                                 | Distribution of execution latencies                               |
+| 9           | 🌲 Weighted Tree View                                          | Full call hierarchy with timing metrics                           |
+| 10          | 🧪 Hardware Counter Analysis                                   | CPU cycles, cache misses, instructions per thread                 |
+| 11          | 🚦 Top Overhead Functions                                      | Ranked list of costliest functions (UDP vs TCP)                   |
+| 12          | 🔍 Function Analysis: `common_fwd_stream_receive`              | RX wrapper in testpmd; top overhead in UDP scenario               |
+| 13          | 🔍 Function Analysis: `rte_eth_rx_burst`                       | API wrapper; first major overhead in TCP scenario                 |
+| 14          | 🔍 Function Analysis: `pmd_rx_burst`                           | PMD-level receiver; actual implementation (calls `tap_recv_pkts`) |
+| 15          | 🔁 UDP vs TCP Comparative Summary                              | Function-wise and structural comparison between the two scenarios |
+| 16          | ✅ Optimization Recommendations                                | Suggestions based on observations                                 |
+
+---
+
+## 📌 Summary Table of Analyzed Functions
+
+| Function Name                 | Scenario | How It Was Found / Traced                                                                 | File or Path (Approximate)                    | Notes                                               |
+|------------------------------|----------|--------------------------------------------------------------------------------------------|-----------------------------------------------|-----------------------------------------------------|
+| `common_fwd_stream_receive`  | UDP      | `grep -rn "common_fwd_stream_receive"` in `app/test-pmd/`                                  | `app/test-pmd/testpmd.h`                      | Inline function in testpmd; top overhead in UDP     |
+| `rte_eth_rx_burst`           | UDP/TCP  | `grep -rn "rte_eth_rx_burst"` in `lib/ethdev/` → line ~6045                                | `lib/ethdev/rte_ethdev.h`                     | API wrapper; **first major overhead in TCP**        |
+| `pmd_rx_burst`               | UDP      | Struct binding: `.rx_pkt_burst = tap_recv_pkts` in `rte_eth_tap.c`                         | `drivers/net/tap/rte_eth_tap.c`               | PMD wrapper; delegates to actual RX logic           |
+| `tap_recv_pkts`              | TCP      | Resolved via trace symbol (e.g., `0x562ae08ee1f4`) using `addr2line`                       | `drivers/net/tap/tap_rx.c` or `rte_eth_tap.c` | Performs `readv()` syscall; source of syscall cost  |
+
+---
+
+> 💡 **Note:**  
+> In the DPDK `net_tap` driver, the PMD function `pmd_rx_burst()` is **functionally equivalent** to `tap_recv_pkts()` and is linked via:
+> ```c
+> .rx_pkt_burst = tap_recv_pkts,
+> ```
+> This means any overhead traced to `pmd_rx_burst` is in fact executed within `tap_recv_pkts()`, which contains the `readv()` syscall and memory buffer logic.
+
 ---
 
 ### 🧠 Scenario Overview

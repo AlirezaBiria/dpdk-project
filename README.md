@@ -508,3 +508,96 @@ The majority of the overhead in `pmd_rx_burst` comes from:
    ###### D --> E[readv() syscall]
 
 
+## 📘 Part II – TCP-Only Rule Configuration and Execution
+
+In this second part of the report, we retain the **same test environment and execution pipeline** as in Part I (which focused on forwarding UDP packets), but we modify the **flow classification rules** to focus **exclusively on TCP traffic**.
+
+> The objective is to analyze the performance and overhead characteristics when the DPDK testpmd application processes only TCP packets — using the same net_tap interface, multi-queue setup, and LTTng tracing infrastructure.
+
+---
+
+### 🔄 What’s Changed?
+
+- The `.pcap` replay file remains the same and still contains mixed traffic (TCP, UDP, ARP, ICMPv6, etc.)
+- The forwarding logic is unchanged: packets arrive at `tap0` and are forwarded to `tap1` via `dpdk-testpmd` using the `net_tap` PMD.
+- **Only the Flow Rules are updated to match TCP traffic.**
+- All other aspects — queue configuration, core binding, tracing setup — remain the same as in Part I.
+
+---
+
+### 📜 Updated Flow Rules: TCP-Only Forwarding
+
+We define flow rules on both ports (port 0 = `tap0`, port 1 = `tap1`) to **match only IPv4 + TCP** packets and forward them to **queue 0**:
+
+```bash
+flow create 0 ingress pattern eth / ipv4 / tcp / end actions queue index 0 / end
+flow create 1 ingress pattern eth / ipv4 / tcp / end actions queue index 0 / end
+```
+
+#### 🧠 Rule Explanation:
+
+Each `flow create` command consists of two parts:
+
+1. **Pattern**:
+   - `eth / ipv4 / tcp / end`  
+     → This matches packets with:
+     - Ethernet header
+     - Followed by an IPv4 header
+     - Containing the TCP protocol
+
+2. **Actions**:
+   - `queue index 0 / end`  
+     → This tells DPDK to enqueue the matched packets to queue 0 on the specified port.
+
+✅ As a result, **only TCP packets** will be processed and forwarded by `testpmd`.
+
+❌ All other packets (UDP, ARP, ICMP, etc.) are not matched and will be dropped silently.
+
+---
+
+### ⚙️ Scenario Execution (Recap)
+
+Although the rule has changed, the following remains the same:
+
+- `testpmd` is launched with `net_tap` devices for `tap0` and `tap1`
+- Two queues are used per port (but only queue 0 will be active here)
+- Traffic is fed using `tcpreplay`
+- All function calls are traced with `LTTng` using `cyg_profile`
+
+---
+
+### ▶️ Step-by-Step Commands
+
+1. **Run testpmd with tracing and TAP interfaces:**
+
+```bash
+sudo -E LD_PRELOAD=liblttng-ust-cyg-profile.so ./build/app/dpdk-testpmd -c 0xf -n 4 \
+  --vdev=net_tap0,iface=tap0,queues=2 \
+  --vdev=net_tap1,iface=tap1,queues=2 \
+  -- \
+  --port-topology=chained \
+  --nb-cores=3 \
+  --rxq=2 --txq=2 \
+  --forward-mode=io \
+  --interactive
+```
+
+2. **Inside the testpmd CLI: apply TCP-only rules:**
+
+```bash
+testpmd> flow create 0 ingress pattern eth / ipv4 / tcp / end actions queue index 0 / end
+testpmd> flow create 1 ingress pattern eth / ipv4 / tcp / end actions queue index 0 / end
+testpmd> start
+```
+
+3. **Replay the PCAP traffic into tap0:**
+
+```bash
+sudo tcpreplay --intf1=dtap0 --loop=1000 ~/captures/test_capture.pcap
+```
+
+---
+
+🔁 This completes the TCP-only version of the forwarding scenario. The packet processing path is now restricted to **TCP over IPv4**, and tracing data will reflect the behavior of `testpmd` under these specific conditions.
+
+➡️ In the next section, we will analyze the LTTng trace results, Flame Graphs, and function-level statistics for this TCP-focused scenario, and compare them with the previous UDP-based setup.

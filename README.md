@@ -782,3 +782,35 @@ This histogram complements the flame/tree analyses by showing:
 - **Heavier operations like memory allocation and syscall-involved reception stand out clearly**
 
 ➡️ Together, this view completes the performance profile of TCP-only forwarding in DPDK.
+
+## 🧪 Hardware Counter Analysis – TID 4609 (Single Thread View, TCP-Only)
+
+This chart shows low-level hardware performance counters for DPDK thread **TID 4609** during the TCP-only testpmd execution. The data includes:
+
+- 🔴 `thread_cpu_cycles` (red) – Total CPU cycles used
+- 🟢 `thread_instructions` (green) – Number of instructions executed
+- 🔵 `thread_cache_misses` (blue) – L3 cache misses
+
+### 🔍 Key Observations:
+
+- Both **CPU cycles** and **instructions** stay relatively stable over time with only minor variance, indicating a **regular and predictable workload**.
+  
+- **Periodic vertical drops** in both red (CPU cycles) and green (instructions) lines suggest **short periods of inactivity or stalls** — possibly due to memory access delays or syscall wait times (e.g., `read()` on TAP).
+
+- The **cache misses** (blue) remain nearly constant and **close to zero** throughout the execution. This is a **very good indicator of efficient cache usage** and locality.
+
+- The tight correlation between CPU cycles and instructions indicates **a balanced pipeline** — no sign of major bottlenecks like stalls, mispredictions, or excessive branching.
+
+---
+
+### 💡 Conclusion:
+
+TID 4609 performs **very efficiently**, with:
+
+- Stable execution behavior
+- Low and consistent cache misses
+- Tight alignment between instructions and CPU cycles
+
+The small periodic dips may represent points where the thread waits for data (e.g., waiting on packet input from TAP). Still, overall, this thread shows **excellent low-level performance** for DPDK TCP forwarding under user-space tracing.
+
+This analysis confirms the system is **not CPU-bound** and tracing overheads are **not causing performance collapse**. The thread-level view provides strong evidence that the bottleneck lies in syscall-bound sections (e.g., `tap_recv_pkts`) and not CPU instruction throughput.

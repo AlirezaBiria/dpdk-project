@@ -601,3 +601,46 @@ sudo tcpreplay --intf1=dtap0 --loop=1000 ~/captures/test_capture.pcap
 🔁 This completes the TCP-only version of the forwarding scenario. The packet processing path is now restricted to **TCP over IPv4**, and tracing data will reflect the behavior of `testpmd` under these specific conditions.
 
 ➡️ In the next section, we will analyze the LTTng trace results, Flame Graphs, and function-level statistics for this TCP-focused scenario, and compare them with the previous UDP-based setup.
+
+##  📊 Analysis with Trace Compass 
+## 🔥 Flame Graph – Function-Level Execution Time Distribution (TCP-Only)
+
+This Flame Graph shows the relative execution time of functions during TCP-only packet forwarding with `dpdk-testpmd` using `net_tap` and traced via LTTng `cyg_profile`. Each horizontal bar represents the self-time of a function, while its vertical stack reveals the call hierarchy.
+
+### 🔍 Key Observations:
+
+- **`pkt_burst_io_forward`** sits at the top of the graph, orchestrating the overall packet forwarding logic.
+- **`common_fwd_stream_receive`** and **`common_fwd_stream_transmit`** are both prominently visible, showing that the receive and transmit paths are balanced in processing.
+- The **receive path**, specifically:
+  - `rte_eth_rx_burst`
+  - `pmd_rx_burst`
+  - `rte_pktmbuf_alloc`
+  - `rte_mbuf_raw_alloc`
+  - `rte_mempool_get_bulk`  
+  is deeply stacked, indicating that memory allocation and PMD receive functions dominate the RX-side workload.
+
+- The **transmit path**, including:
+  - `rte_eth_tx_burst`
+  - `pmd_tx_burst`
+  - `rte_pktmbuf_free`, `rte_pktmbuf_free_seg`
+  - `rte_mempool_put_bulk`  
+  appears immediately after `common_fwd_stream_transmit` and contributes substantial overhead as well.
+
+- **TCP-specific behavior**:  
+  No explicit TCP stack-level processing is visible (since DPDK operates at L2–L4 forwarding), but the heavier weight in both memory allocation and deallocation functions may reflect larger packet sizes or more stateful packet flows typical of TCP sessions.
+
+- **No idle gaps**:  
+  The stack depth and continuity suggest a tight processing loop, with minimal idle time between receive and transmit stages.
+
+---
+
+### 💡 Conclusion:
+
+Compared to the previous UDP-only Flame Graph, the TCP-only trace exhibits:
+
+- **Longer execution time** in allocation and deallocation routines (e.g., `rte_pktmbuf_alloc`, `rte_mempool_get_bulk`)
+- **More balanced overhead** between RX and TX paths
+- Similar control structure (e.g., `pkt_burst_io_forward`, `common_fwd_stream_*`)
+- Potential increase in per-packet processing cost due to larger TCP headers and more complex mbuf handling.
+
+This Flame Graph confirms that under TCP-only forwarding, memory operations and PMD driver interactions are the main contributors to runtime overhead. Further insights will be derived in the next sections using function duration statistics, counters, and weighted tree views.

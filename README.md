@@ -814,3 +814,76 @@ TID 4609 performs **very efficiently**, with:
 The small periodic dips may represent points where the thread waits for data (e.g., waiting on packet input from TAP). Still, overall, this thread shows **excellent low-level performance** for DPDK TCP forwarding under user-space tracing.
 
 This analysis confirms the system is **not CPU-bound** and tracing overheads are **not causing performance collapse**. The thread-level view provides strong evidence that the bottleneck lies in syscall-bound sections (e.g., `tap_recv_pkts`) and not CPU instruction throughput.
+
+## 🚦 Overhead Analysis – Top Functions with Highest Impact (TCP-Only)
+
+This section summarizes the top functions contributing to execution overhead in the TCP-only DPDK + net_tap + LTTng tracing scenario. The ranking is based on a combination of duration, call frequency, and depth in the call stack.
+
+| Rank | Function Name                    | Role                              | Overhead Indicators                                           | Notes                                           |
+|------|----------------------------------|-----------------------------------|---------------------------------------------------------------|-------------------------------------------------|
+| 1    | `rte_eth_rx_burst`               | Receive burst API                 | 🟢 High duration<br>🟢 Core of RX path                         | Delegates to PMD, appears in all RX stacks     |
+| 2    | `0x562ae08ee1f4`                 | PMD backend (tap_recv_pkts)       | 🟢 Heavy processing<br>🟢 Syscall-based (read)<br>🔺 Inlined   | Actual RX cost from TAP interface              |
+| 3    | `pmd_rx_burst`                   | PMD-level RX wrapper              | 🟢 High self time<br>🟡 Moderate total time                    | Repeats in all RX bursts                       |
+| 4    | `__rte_trace_point_fp_is_enabled`| LTTng tracepoint instrumentation | 🔴 Extremely frequent (443k calls)<br>🟡 Non-trivial time      | Adds measurable tracing overhead               |
+| 5    | `rte_pktmbuf_alloc`              | Allocate packet buffer            | 🟡 Moderate time<br>🟢 Memory-sensitive                        | Used in every packet path                      |
+| 6    | `rte_mempool_get_bulk`           | Bulk buffer fetch from pool       | 🟡 High total time<br>🟡 Appears in mempool trees              | Performance sensitive in burst RX              |
+| 7    | `rte_mbuf_raw_alloc`             | Raw buffer allocator              | 🟡 Deep in path<br>🟡 Per-packet allocator                     | Alloc latency bottleneck                       |
+| 8    | `rte_pktmbuf_reset_headroom`     | Reset mbuf headroom               | 🟡 Frequent<br>🟡 Memory operation                             | Memory overhead (low but cumulative)           |
+| 9    | `rte_mempool_trace_generic_get`  | Mempool tracing helper            | 🔴 Appears repeatedly<br>🔴 Trace-only cost                    | No functional impact, pure instrumentation      |
+| 10   | `common_fwd_stream_receive`      | RX wrapper in testpmd            | 🟡 Lightweight wrapper<br>🟡 Very high frequency               | Amplifies indirect overheads from sub-calls    |
+
+---
+
+### 💡 Summary:
+
+- The **top 3 contributors** are firmly in the **receive path**: `rte_eth_rx_burst`, `tap_recv_pkts`, and `pmd_rx_burst`
+- **LTTng instrumentation**, especially `__rte_trace_point_fp_is_enabled`, appears in many layers and introduces non-negligible overhead
+- **Memory allocation functions** (pktmbuf, mempool) add latency due to frequent usage in the packet loop
+- Even simple wrappers like `common_fwd_stream_receive` become relevant due to **high call frequency**
+
+🧠 Recommendation:  
+To reduce overhead in TCP forwarding:
+- Investigate alternatives to `net_tap` (e.g., `memif` or `af_xdp`)  
+- Batch packet reception (`nb_pkt_per_burst`) to amortize syscall cost  
+- Minimize tracing in production runs or sample selectively
+
+## 🔁 Comparative Overhead Analysis – UDP vs TCP
+
+This section compares the top performance overhead sources observed in the two execution scenarios: **UDP-only** and **TCP-only** forwarding using DPDK + net_tap + LTTng.
+
+| Aspect                        | UDP-Only Scenario                             | TCP-Only Scenario                              |
+|------------------------------|-----------------------------------------------|------------------------------------------------|
+| 🥇 Top Function              | `common_fwd_stream_receive` (lightweight loop)| `rte_eth_rx_burst` (driver interaction point)  |
+| 🥈 Second Function           | `rte_eth_rx_burst`                             | `0x562ae08ee1f4` → PMD backend (`tap_recv_pkts`)|
+| 🥉 Third Function            | `rte_ethdev_trace_rx_burst` (trace wrapper)   | `pmd_rx_burst` (driver wrapper)                |
+| 🔍 Tracing Overhead          | High – seen in upper levels                   | Moderate – still significant, but deeper       |
+| 📦 Memory Allocation Impact  | Moderate – mostly visible in `rte_pktmbuf_free`| High – heavy usage of `rte_pktmbuf_alloc`, `mempool`|
+| 🧠 syscall overhead          | None (UDP rules matched → packets forwarded)  | Present – `read()` in `tap_recv_pkts` dominates|
+| 📊 Execution Pattern         | Uniform and fast                              | Slightly variable with syscall delays          |
+| 📉 Cache Behavior            | Minimal misses (flat curves)                  | Still minimal, though with periodic stalls     |
+| ⚠️ Bottleneck Depth          | Shallow – mostly wrappers                     | Deep – delegated to PMD and memory subsystems  |
+| 🎯 Optimization Target       | Loop efficiency and tracing config            | TAP interaction and syscall amortization       |
+
+---
+
+### 💡 Insights:
+
+- In **UDP-only**, overhead is concentrated in **top-level testpmd logic and instrumentation** because the path is short and efficient.
+- In **TCP-only**, overhead shifts deeper into the stack, due to:
+  - Memory allocations (`rte_mbuf_raw_alloc`, `mempool`)
+  - Kernel interaction via `read()` in `tap_recv_pkts`
+
+This confirms that **TCP handling in user-space DPDK with TAP introduces significantly more processing cost**, both due to system-level interaction and per-packet memory overhead.
+
+---
+
+### ✅ Final Recommendation:
+
+| Area                | Optimization Suggestion                               |
+|---------------------|--------------------------------------------------------|
+| Syscall overhead     | Replace `net_tap` with `memif` or `af_xdp` for user-space RX |
+| Memory allocation    | Tune `mbuf` pool sizes, batch allocations, reduce resets      |
+| Tracing impact       | Use selective LTTng UST probes or disable tracing in prod     |
+| Flow rule strategy   | Avoid rules that lead to unforwarded traffic (e.g., kernel rejection of TCP flows) |
+
+Together, these improvements can significantly reduce execution time and improve forwarding throughput for both UDP and TCP in DPDK.

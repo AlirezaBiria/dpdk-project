@@ -714,3 +714,71 @@ This statistical view confirms the findings from the Flame Graph and Flame Chart
 Compared to the UDP-only scenario, the TCP case shows **longer average function durations** and **larger total time per function**, highlighting that TCP packet processing, even without kernel stack involvement, leads to greater user-space processing overhead in DPDK.
 
 ➡️ Next, we’ll examine the Weighted Tree View to understand the hierarchical structure of function calls and determine the dominant paths in the TCP-only execution trace.
+
+## 🌲 Weighted Tree View – Function Call Tree with Timing Metrics (TCP-Only)
+
+This view shows the full hierarchical structure of function calls during the TCP-only scenario on `dpdk-worker1`. Each branch in the tree represents a nested call, with metrics for total duration, self time (exclusive), and number of calls.
+
+### 🔍 Key Observations:
+
+- **Top-Level Function**:  
+  - `pkt_burst_io_forward` is the root of the forwarding loop, consuming **2.6 s** total time with **325.8k calls**.
+  - Its child, `common_fwd_stream_receive`, accounts for **2.18 s**, revealing RX as the main execution path.
+
+- **Receive Path Breakdown**:
+  - `rte_eth_rx_burst`: 1.72 s total, 325.8k calls
+  - `0x562ae08ee1f4`: 697 ms total (likely `tap_recv_pkts`)
+  - `__rte_trace_point_fp_is_enabled`: 238 ms overhead (tracing cost)
+  - `pmd_rx_burst`: 274 ms (self time 265 ms → very low nesting)
+
+- **Memory Allocation Chain**:
+  - `rte_pktmbuf_alloc` → `rte_mbuf_raw_alloc` → `rte_mempool_get_bulk`  
+    These functions combined account for several hundred microseconds per burst.
+  - `rte_mempool_trace_generic_get`, `rte_trace_point_fp_is_enabled`, and other trace helpers appear deeply nested under memory pools, showing cumulative instrumentation cost.
+
+- **Transmit Path**:
+  - `common_fwd_stream_transmit` is lightweight: only 10 ms total time across all calls.
+
+- **Function Call Pie Chart** (right side of second image):  
+  Confirms that the **bulk of processing is concentrated in `pmd_rx_burst` and `tap_recv_pkts`**, matching findings from Flame Graph and Stats.
+
+---
+
+### 💡 Conclusion:
+
+The weighted tree confirms that the **receive path dominates total execution time** in the TCP-only scenario. Memory management (`mbuf` and `mempool`) and PMD-level functions (`tap_recv_pkts`, `pmd_rx_burst`) are the primary performance hotspots.
+
+The self time of `pmd_rx_burst` (265 ms) is particularly high and deserves deeper optimization or batching.
+
+Instrumentation (via LTTng trace points) introduces measurable cost — e.g., `__rte_trace_point_fp_is_enabled` appears at multiple levels, adding up to hundreds of milliseconds.
+
+➡️ Overall, this hierarchical view helps identify **which sub-paths (e.g., mempool, PMD, tracing)** contribute most to latency and highlights **optimization targets** for reducing RX overhead in TCP forwarding with DPDK.
+
+## 📉 Function Durations Distribution – Histogram of Execution Time (TCP-Only)
+
+This view presents a histogram showing how long each function took to execute during the TCP-only scenario. The x-axis shows duration (in microseconds), and the y-axis shows the number of function calls falling into each duration bin.
+
+### 🔍 Key Observations:
+
+- **Most function calls** fall within the **0.5 to 2 μs range**, with a clear cluster around **600–800 ns**.
+  - This includes trace functions like `__rte_trace_point_fp_is_enabled` and PMD receive wrappers like `pmd_rx_burst`.
+
+- There are **occasional spikes in longer durations**, especially:
+  - `0x562ae08ee1f4` (likely `tap_recv_pkts`) → ranges between **1.8–2.5 μs**
+  - `rte_eth_rx_burst` → hits **4.4–4.5 μs** in some cases
+
+- **No extreme outliers** (e.g., >10 μs), indicating **tight control over per-function latency** even under TCP packet load.
+
+- The histogram confirms that while **most function executions are short and efficient**, **a few core functions (RX, PMD, tap)** contribute longer runtimes due to memory operations and system interactions.
+
+---
+
+### 💡 Conclusion:
+
+The distribution confirms that **most user-space functions in the DPDK TCP-only pipeline execute quickly**, but **receive path components show variability**, especially in `rte_eth_rx_burst` and its PMD backend (`tap_recv_pkts`).
+
+This histogram complements the flame/tree analyses by showing:
+- Execution latency remains consistent for most helpers and instrumentation
+- **Heavier operations like memory allocation and syscall-involved reception stand out clearly**
+
+➡️ Together, this view completes the performance profile of TCP-only forwarding in DPDK.

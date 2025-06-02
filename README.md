@@ -965,9 +965,5 @@ Under the current scenario, this resolves to `tap_recv_pkts()` in the `net_tap` 
 
 ---
 
-### ⏭️ Next Step
 
-Each step of the analysis covers **only one function**. Therefore:
-
-> In the next part, we will analyze the `tap_recv_pkts()` function, which is responsible for the bulk of the observed overhead in TCP packet reception.
 

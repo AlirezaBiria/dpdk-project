@@ -887,3 +887,87 @@ This confirms that **TCP handling in user-space DPDK with TAP introduces signifi
 | Flow rule strategy   | Avoid rules that lead to unforwarded traffic (e.g., kernel rejection of TCP flows) |
 
 Together, these improvements can significantly reduce execution time and improve forwarding throughput for both UDP and TCP in DPDK.
+
+## 🧩 Stepwise Overhead Analysis in TCP Scenario – Part 1: `rte_eth_rx_burst()`
+
+In this section, we analyze the `rte_eth_rx_burst()` function within the packet forwarding path under the TCP-only scenario using DPDK and the `net_tap` driver. The goal is to understand the root of the function-level overhead observed in Trace Compass.
+
+---
+
+### 📍 Locating the Function Code
+
+The `rte_eth_rx_burst()` function is defined as an inline function in the `rte_ethdev.h` header inside the `ethdev` library:
+
+```bash
+cd ~/dpdk-23.11/lib/ethdev/
+grep -rn "rte_eth_rx_burst" .
+```
+
+Output:
+
+```
+./rte_ethdev.h:6045:rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id, ...
+```
+
+To view the code:
+
+```bash
+nano +6045 rte_ethdev.h
+```
+
+---
+
+### 🧠 Function Code and Behavior
+
+```c
+rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
+                 struct rte_mbuf **rx_pkts, const uint16_t nb_pkts)
+{
+    struct rte_eth_fp_ops *p = &rte_eth_fp_ops[port_id];
+    void *qd = p->rxq.data[queue_id];
+
+    uint16_t nb_rx = p->rx_pkt_burst(qd, rx_pkts, nb_pkts);
+
+#ifdef RTE_ETHDEV_RXTX_CALLBACKS
+    void *cb = rte_atomic_load_explicit(&p->rxq.clbk[queue_id],
+                                         rte_memory_order_relaxed);
+    if (unlikely(cb != NULL))
+        nb_rx = rte_eth_call_rx_callbacks(port_id, queue_id, rx_pkts, nb_rx, nb_pkts, cb);
+#endif
+
+    rte_ethdev_trace_rx_burst(port_id, queue_id, (void **)rx_pkts, nb_rx);
+    return nb_rx;
+}
+```
+
+---
+
+### 🔍 Behavioral Analysis and Overhead Source
+
+- This function acts as a lightweight **wrapper** around the PMD-provided `rx_pkt_burst` function.
+- It does not perform any heavy computation itself.
+- Minor overhead may be added by:
+  - RX callbacks (usually disabled)
+  - Tracing (enabled in our experiments)
+
+---
+
+### ⚠️ Conclusion
+
+The **main source of overhead is not within `rte_eth_rx_burst()`** itself.  
+Instead, it originates from the call to:
+
+```c
+nb_rx = p->rx_pkt_burst(qd, rx_pkts, nb_pkts);
+```
+
+Under the current scenario, this resolves to `tap_recv_pkts()` in the `net_tap` PMD.
+
+---
+
+### ⏭️ Next Step
+
+Each step of the analysis covers **only one function**. Therefore:
+
+> In the next part, we will analyze the `tap_recv_pkts()` function, which is responsible for the bulk of the observed overhead in TCP packet reception.
+
